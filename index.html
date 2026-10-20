@@ -337,6 +337,11 @@ tr.row-unclaimed{background:#fffaf0}
 #poMain .btn-clear{background:#e74c3c;color:#fff}
 #poMain .btn-remove{background:#ffebee;color:#c0392b;border:1px solid #ffcdd2;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem}
 #poMain .cart-table{width:100%;border-collapse:collapse;font-size:0.83rem}
+#poMain .cart-in{width:90px;padding:5px 7px;border:1.5px solid #d0d7e2;border-radius:6px;font-size:.82rem;font-family:inherit}
+#poMain .cart-in.cart-miss{border-color:#e67e22;background:#fff7ec}
+#poMain .bulk-box{border:1.5px dashed #9b7fd1;border-radius:10px;padding:14px;background:#faf7ff;font-size:.84rem}
+#poMain .bulk-box textarea{width:100%;margin-top:8px;padding:8px 10px;border:1.5px solid #d0d7e2;border-radius:8px;font-family:inherit;font-size:.82rem}
+#poMain .bulk-box select{font-size:.75rem;padding:3px 4px;border-radius:5px;border:1px solid #c9b8ea;font-weight:700}
 #poMain .cart-empty{text-align:center;color:#bbb;padding:28px;font-size:0.88rem}
 #poMain .total-row{text-align:right;padding:10px 0;font-size:0.9rem;color:#1a3a5c;font-weight:600}
 #poMain .item-hint{color:#999;font-size:0.85rem;margin-bottom:12px}
@@ -953,7 +958,9 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <div style="margin-top:12px;display:flex;gap:10px">
         <button class="btn btn-add" onclick="poAddToCart()">+ Add to Cart</button>
         <button class="btn btn-clear" onclick="poClearItem()">Clear</button>
+        <button class="btn btn-add" style="margin-left:auto;background:linear-gradient(135deg,#7b4bb7,#5b2c91)" onclick="poBulkOpen()">📋 Bulk Items (paste from Excel)</button>
       </div>
+      <div id="poBulk" style="display:none;margin-top:14px"></div>
     </div>
 
     <div class="panel">
@@ -3284,20 +3291,127 @@ function poRenderCart(){
     area.innerHTML = '<div class="cart-empty">No items added yet.</div>';
     document.getElementById('poTotalRow').style.display = 'none'; btn.disabled = true; return;
   }
-  var sum = PO_CART.reduce(function(a, x){ return a + x.qty * x.unit_cost; }, 0);
+  var sum = PO_CART.reduce(function(a, x){ return a + (x.qty || 0) * (x.unit_cost || 0); }, 0);
   var codedCart = poUsesCodeBox(PO_CART[0].cat), eqCart = PO_CART[0].cat === 'EQUIPMENT' || PO_CART[0].cat === 'HARDWARE';
   area.innerHTML = '<table class="cart-table"><thead><tr><th>' + (codedCart ? 'Assigned Code' : 'Item Code') + '</th><th>' + (codedCart ? 'PO Description' : 'Description') + '</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Total</th><th></th></tr></thead><tbody>' +
     PO_CART.map(function(r, i){
       var gh = r.group && (i === 0 || PO_CART[i - 1].group !== r.group) ? '<tr><td></td><td colspan="6" style="font-weight:700;color:#1a3a5c;background:#f3f7fc">📅 ' + esc(r.group) + '</td></tr>' : '';
       var codeCell = r.item_code ? '<span title="' + esc(r.assignedDesc || '') + '" style="cursor:help;border-bottom:1px dotted #888">' + esc(r.item_code) + '</span>'
         : eqCart ? '<span style="color:#888;font-style:italic">no code</span>' : codedCart ? '<span style="color:#b26a00;font-style:italic">to be coded</span>' : '<span style="color:#aaa;font-style:italic">(auto)</span>';
-      return gh + '<tr><td>' + codeCell + '</td><td>' + esc(r.description) + '</td><td>' + esc(r.unit) + '</td>' +
-        '<td>' + r.qty + '</td><td>₱' + r.unit_cost.toFixed(2) + '</td><td>₱' + (r.qty * r.unit_cost).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td>' +
+      return gh + '<tr><td>' + codeCell + '</td><td>' + esc(r.description) + '</td><td><input class="cart-in' + (r.unit ? '' : ' cart-miss') + '" type="text" value="' + esc(r.unit || '') + '" placeholder="unit" style="width:70px" oninput="poCartSet(' + i + ',\'unit\',this)"/></td>' +
+        '<td><input class="cart-in' + (r.qty > 0 ? '' : ' cart-miss') + '" type="number" min="0" step="any" value="' + (r.qty > 0 ? r.qty : '') + '" placeholder="qty" oninput="poCartSet(' + i + ',\'qty\',this)"/></td>' +
+        '<td><input class="cart-in' + (r.unit_cost >= 0 && r.unit_cost !== null && !isNaN(r.unit_cost) ? '' : ' cart-miss') + '" type="number" min="0" step="0.01" value="' + (isNaN(r.unit_cost) || r.unit_cost === null ? '' : r.unit_cost) + '" placeholder="0.00" oninput="poCartSet(' + i + ',\'unit_cost\',this)"/></td>' +
+        '<td id="poCartT' + i + '">₱' + ((r.qty || 0) * (r.unit_cost || 0)).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td>' +
         '<td><button class="btn-remove" onclick="poRemove(' + i + ')">✕</button></td></tr>';
     }).join('') + '</tbody></table>';
   document.getElementById('poTotalAmt').textContent = '₱' + sum.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
   document.getElementById('poTotalRow').style.display = 'block';
   btn.disabled = false;
+}
+// Cart: the Unit, Qty and Unit Cost can be typed right in the cart (e.g. after Bulk Items)
+function poCartSet(i, k, el){
+  var r = PO_CART[i]; if (!r) return;
+  if (k === 'unit') r.unit = el.value.trim();
+  else { var v = el.value === '' ? (k === 'qty' ? 0 : NaN) : parseFloat(el.value); r[k] = v; }
+  el.classList.toggle('cart-miss', k === 'unit' ? !r.unit : k === 'qty' ? !(r.qty > 0) : (isNaN(r.unit_cost) || r.unit_cost < 0));
+  var t = document.getElementById('poCartT' + i); if (t) t.textContent = '₱' + ((r.qty || 0) * (r.unit_cost || 0)).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+  var sum = PO_CART.reduce(function(a, x){ return a + (x.qty || 0) * (x.unit_cost || 0); }, 0);
+  document.getElementById('poTotalAmt').textContent = '₱' + sum.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+// ── Bulk Items: paste the PO's items from Excel (one row per item) ─────────────
+var PO_BULK = null;   // { rows: [[cells]], map: [field per column], header: bool }
+var PO_BULK_FIELDS = [['', '— skip —'], ['code', 'Item Code'], ['desc', 'Description'], ['unit', 'Unit'], ['qty', 'Qty'], ['cost', 'Unit Cost']];
+function poBulkOpen(){
+  var cat = document.getElementById('poCategory').value, el = document.getElementById('poBulk');
+  if (!cat){ poMsg('Please select a Category / Unit first.', 'err'); return; }
+  if (el.style.display !== 'none' && !PO_BULK){ el.style.display = 'none'; return; }
+  PO_BULK = null; el.style.display = '';
+  el.innerHTML = '<div class="bulk-box"><b>📋 Bulk Items</b> — in Excel, select the rows of the PO\'s items (Description, and if you have them: Item Code, Unit, Qty, Unit Cost), copy (Ctrl + C), then paste here (Ctrl + V).' +
+    '<textarea id="poBulkTxt" rows="7" placeholder="Paste the rows here…" oninput="poBulkParse()"></textarea>' +
+    '<div id="poBulkPrev" class="item-hint">The rows will show here so you can check them before adding to the cart. The Qty can be typed later in the Cart.</div>' +
+    '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn btn-add" id="poBulkAdd" onclick="poBulkAdd()" disabled>+ Add to Cart</button><button class="btn btn-clear" onclick="PO_BULK=null;document.getElementById(\'poBulk\').style.display=\'none\'">Close</button></div></div>';
+  document.getElementById('poBulkTxt').focus();
+}
+function poBulkNum(v){ var s = String(v || '').replace(/[₱,\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null; }
+function poBulkParse(){
+  var txt = document.getElementById('poBulkTxt').value.replace(/\r/g, '');
+  // Excel puts quotes around a cell with line breaks — keep it one cell
+  var rows = [], cur = [], cell = '', q = false;
+  for (var i = 0; i < txt.length; i++){
+    var ch = txt[i];
+    if (q){ if (ch === '"' && txt[i + 1] === '"'){ cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; continue; }
+    if (ch === '"' && cell === '') { q = true; continue; }
+    if (ch === '\t'){ cur.push(cell); cell = ''; continue; }
+    if (ch === '\n'){ cur.push(cell); rows.push(cur); cur = []; cell = ''; continue; }
+    cell += ch;
+  }
+  if (cell !== '' || cur.length){ cur.push(cell); rows.push(cur); }
+  rows = rows.map(function(r){ return r.map(function(c){ return c.replace(/\s+/g, ' ').trim(); }); }).filter(function(r){ return r.some(function(c){ return c; }); });
+  if (!rows.length){ PO_BULK = null; document.getElementById('poBulkPrev').innerHTML = 'Nothing pasted yet.'; document.getElementById('poBulkAdd').disabled = true; return; }
+  var nc = Math.max.apply(null, rows.map(function(r){ return r.length; }));
+  rows = rows.map(function(r){ while (r.length < nc) r.push(''); return r; });
+  // a header row (Description / Qty / Unit …) is recognised and used to set the columns
+  var H = { code: /code/i, desc: /desc|particular|item|article/i, unit: /^(unit|uom|u\/m)\b/i, qty: /qty|quantity/i, cost: /cost|price/i };
+  var head = rows[0], map = [], isHead = head.some(function(c){ return /desc|particular|qty|quantity|unit|cost|price|code/i.test(c); }) && !head.some(function(c){ return poBulkNum(c) !== null; });
+  if (isHead){
+    head.forEach(function(c, j){ var f = ''; ['code', 'qty', 'cost', 'unit', 'desc'].some(function(k){ if (H[k].test(c) && map.indexOf(k) === -1){ f = k; return true; } }); map[j] = f; });
+  } else {
+    // guess from the cells: codes like A0123, numbers (whole = qty, decimals / big = cost), short text = unit, long text = description
+    var data = rows, used = {};
+    for (var j = 0; j < nc; j++){
+      var col = data.map(function(r){ return r[j]; }).filter(function(c){ return c; });
+      var nums = col.filter(function(c){ return poBulkNum(c) !== null; }).length;
+      var codes = col.filter(function(c){ return /^[A-Z]{1,3}\d{2,6}[A-Z]{0,3}$/i.test(c); }).length;
+      var len = col.reduce(function(a, c){ return a + c.length; }, 0) / Math.max(col.length, 1);
+      var f = '';
+      if (col.length && codes >= col.length * .6 && !used.code) f = 'code';
+      else if (col.length && nums >= col.length * .6){ var dec = col.some(function(c){ return /\.\d/.test(c); }); f = !used.qty && !dec ? 'qty' : !used.cost ? 'cost' : ''; }
+      else if (len > 14 && !used.desc) f = 'desc';
+      else if (len && len <= 14 && !used.unit) f = 'unit';
+      if (f) used[f] = true; map[j] = f;
+    }
+    if (!used.desc){ var best = -1, bl = -1; for (var k = 0; k < nc; k++){ var L = rows.reduce(function(a, r){ return a + r[k].length; }, 0); if (!map[k] && L > bl){ bl = L; best = k; } } if (best >= 0) map[best] = 'desc'; }
+  }
+  PO_BULK = { rows: isHead ? rows.slice(1) : rows, map: map, header: isHead, nc: nc };
+  poBulkPreview();
+}
+function poBulkItems(){
+  var B = PO_BULK, cat = document.getElementById('poCategory').value, coded = poUsesCodeBox(cat), eq = cat === 'EQUIPMENT' || cat === 'HARDWARE';
+  var col = function(r, f){ var j = B.map.indexOf(f); return j === -1 ? '' : r[j]; };
+  return B.rows.map(function(r){
+    var desc = col(r, 'desc'), code = col(r, 'code').toUpperCase().replace(/\s+/g, ''), m;
+    if (!code && (m = desc.match(/\(([A-Z]{1,3}\d{2,6}[A-Z]{0,3})\)\s*$/i))) code = m[1].toUpperCase();
+    var it = code && coded ? PO_ITEMS.filter(function(x){ return x.item_code.toUpperCase() === code && x.item_code.indexOf('AUTO-') !== 0 &&
+      (!eq || String(x.category || '').toUpperCase() === cat); })[0] : null;
+    var cost = poBulkNum(col(r, 'cost'));
+    return { cat: cat, item_code: it ? it.item_code : '', description: desc || (it ? it.description : ''), unit: col(r, 'unit') || (it ? it.unit || '' : ''),
+             qty: poBulkNum(col(r, 'qty')) || 0, unit_cost: cost === null ? NaN : cost, assignedDesc: it ? it.description : '', codeTyped: code && !it ? code : '' };
+  }).filter(function(x){ return x.description; });
+}
+function poBulkPreview(){
+  var B = PO_BULK, el = document.getElementById('poBulkPrev'); if (!B) return;
+  var items = poBulkItems(), coded = poUsesCodeBox(document.getElementById('poCategory').value);
+  var sel = function(j){ return '<select onchange="PO_BULK.map[' + j + ']=this.value;poBulkPreview()">' + PO_BULK_FIELDS.map(function(f){ return '<option value="' + f[0] + '"' + (B.map[j] === f[0] ? ' selected' : '') + '>' + f[1] + '</option>'; }).join('') + '</select>'; };
+  var miss = items.filter(function(x){ return !x.unit; }).length, noq = items.filter(function(x){ return !(x.qty > 0); }).length, unk = items.filter(function(x){ return x.codeTyped; }).length;
+  el.innerHTML = '<div style="margin:8px 0 4px"><b>' + items.length + ' item(s)</b> found' + (B.header ? ' (the first row was read as the column names)' : '') + '. Check that each column is right — change it in the dropdown if not:</div>' +
+    '<div class="ap-scroll" style="max-height:300px"><table class="cart-table"><thead><tr>' + B.map.map(function(f, j){ return '<th>' + sel(j) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      B.rows.slice(0, 60).map(function(r){ return '<tr>' + r.map(function(c, j){ return '<td' + (B.map[j] ? '' : ' style="color:#bbb"') + '>' + esc(c) + '</td>'; }).join('') + '</tr>'; }).join('') +
+      (B.rows.length > 60 ? '<tr><td colspan="' + B.nc + '" style="color:#888">… ' + (B.rows.length - 60) + ' more</td></tr>' : '') + '</tbody></table></div>' +
+    '<div style="margin-top:6px;font-size:.78rem;color:#5d6d7e">' + [noq ? '✏ ' + noq + ' without Qty — type it in the Cart' : '', miss ? '✏ ' + miss + ' without Unit — type it in the Cart' : '',
+      coded && unk ? '⚠ ' + unk + ' code(s) not in the item list — added as "to be coded"' : ''].filter(Boolean).join(' · ') + '</div>';
+  document.getElementById('poBulkAdd').disabled = !items.length;
+  document.getElementById('poBulkAdd').textContent = '+ Add ' + items.length + ' item(s) to Cart';
+}
+function poBulkAdd(){
+  var cat = document.getElementById('poCategory').value;
+  if (PO_CART.length && PO_CART[0].cat !== cat){ PO_CART = []; }
+  var items = poBulkItems(); if (!items.length) return;
+  items.forEach(function(x){ x.group = ''; delete x.codeTyped; PO_CART.push(x); });
+  PO_BULK = null; document.getElementById('poBulk').style.display = 'none';
+  poRenderCart();
+  poMsg('✅ ' + items.length + ' item(s) added to the Cart — type the Qty (and the Unit / Unit Cost if blank) in the Cart, then Submit PO.', 'ok');
+  document.getElementById('poCartArea').scrollIntoView && document.getElementById('poCartArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function poSubmit(){
@@ -3314,6 +3428,8 @@ async function poSubmit(){
   if (!v('poTerms') || v('poTerms') === '__new'){ poMsg('Please select the Terms.', 'err'); return; }
   if (!v('poFund')){ poMsg('Please select a Fund.', 'err'); return; }
   if (!PO_CART.length){ poMsg('Add at least one item.', 'err'); return; }
+  var bad = PO_CART.map(function(r, i){ return (!(r.qty > 0) || !r.unit || isNaN(r.unit_cost) || r.unit_cost < 0) ? i + 1 : 0; }).filter(Boolean);
+  if (bad.length){ poMsg('Type the Qty, Unit and Unit Cost of every item in the Cart — missing on line(s) ' + bad.slice(0, 15).join(', ') + (bad.length > 15 ? ' …' : '') + '.', 'err'); return; }
 
   var btn = document.getElementById('poSubmitBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -4467,7 +4583,8 @@ function apLock(){
 
 function apTabsFor(){
   var all = [['todo','📝 To Do'],['beg','📦 Beg. Balance'],['po','📋 PO'],['rcv','📥 Receive / IAR'],['ris','📤 Issuance (RIS)'],['rsmi','🧾 RSMI'],['xfer','🔁 Transfer of Item'],['master','📚 Master Lists'],['log','🕘 Edit Log']];
-  if (ME.role === 'Approver' || ME.role === 'Admin') return all;
+  if (ME.role === 'Approver') return all;
+  if (ME.role === 'Admin') return [['master','📚 Master Lists'],['log','🕘 Edit Log']];   // approvals are for the Approvers only
   if (ME.role === 'Encoder') return [['master','📚 Master Lists']];
   return [];
 }
@@ -4498,7 +4615,7 @@ function apTodoRender(){
   var nOpen = vis.filter(function(t){ return t.status === 'OPEN'; }).length;
   var rows = vis.filter(function(t){ return TODO_SHOW === 'ALL' || t.status === TODO_SHOW; });
   var tab = document.getElementById('apTab_todo'); if (tab) tab.innerHTML = '📝 To Do' + (TODO_ROWS.filter(function(t){ return t.status === 'OPEN'; }).length ? ' <span class="pt-count">' + TODO_ROWS.filter(function(t){ return t.status === 'OPEN'; }).length + '</span>' : '');
-  var can = ME.role === 'Approver' || ME.role === 'Admin';
+  var can = ME.role === 'Approver';
   body.innerHTML = '<div class="sx-card"><div class="sx-h">📝 To Do — ' + esc(units ? units.join(' + ') : 'all units') + '</div>' +
     '<p class="sx-hint" style="margin:0 0 10px">Things to check on your POs (from the import of MANUAL MONITORING and the old app). Open the PO, fix it, then click <b>✓ Done</b>. ' +
       (units && units.length > 1 ? 'You also see your sub-unit ' + esc(units.slice(1).join(', ')) + '.' : '') + '</p>' +
@@ -4531,7 +4648,7 @@ async function apBegView(){
   } catch(e){ body.innerHTML = '<div class="ap-empty">⚠ ' + esc(errText(e)) + ' — has update 37 been run?</div>'; return; }
   apBegRender();
 }
-function apBegCan(){ return ME.role === 'Approver' || ME.role === 'Admin'; }
+function apBegCan(){ return ME.role === 'Approver'; }
 function apBegRender(){
   var body = document.getElementById('apBody'); if (!body || AP_TAB !== 'beg') return;
   var units = myUnits() || STOCK_UNITS, q = BEG_Q.trim().toLowerCase();
@@ -4619,9 +4736,9 @@ async function apInit(){
   var tabs = apTabsFor();
   if (!tabs.length){ document.getElementById('apBody').innerHTML = '<div class="ap-empty">⛔ Only the Approver and Admin can use this page.</div>'; return; }
   AP_RO = ME.role !== 'Approver';
-  document.querySelector('#apMain .topbar h1').textContent = ME.role === 'Encoder' ? '📚 Master Lists' : '✅ Approvals';
+  document.querySelector('#apMain .topbar h1').textContent = ME.role === 'Encoder' ? '📚 Master Lists' : ME.role === 'Admin' ? '📚 Master Lists & Edit Log' : '✅ Approvals';
   document.getElementById('apRoleNote').textContent = ME.role === 'Encoder' ? 'Encoder — add and edit suppliers, end users, item codes and locations; every change is logged'
-    : AP_RO ? 'Admin — view only (can add suppliers, end users and item codes)' : 'Approver — direct edits; every change is logged';
+    : AP_RO ? 'Admin — Master Lists (add suppliers, end users, item codes) and the Edit Log. Approvals are done by the Approvers.' : 'Approver — direct edits; every change is logged';
   var iar = document.getElementById('rcMoIar'); if (iar && iar.parentNode !== document.body) document.body.appendChild(iar);
   document.getElementById('apTabs').innerHTML = tabs.map(function(t){
     return '<button class="subtab-btn" id="apTab_' + t[0] + '" onclick="apSwitch(\'' + t[0] + '\')">' + t[1] + '</button>';
