@@ -2381,7 +2381,7 @@ function rcTypeChange(){
   document.getElementById('rcTitle').textContent = RC_IS_ADV ? '📥 Advance Delivery (No PO yet)' : '📥 Receive Items';
   document.getElementById('rcHint').innerHTML = RC_IS_ADV
     ? 'Fill in one item below and click <b>+ Add to Cart</b>. If the same item came with two expiry dates, add it twice (once per expiry).'
-    : 'Pick a PO above — its items with an open balance will appear here. Use <b>＋ Batch</b> when one item arrived with more than one expiry date.';
+    : 'Pick a PO above — its items with an open balance will appear here. Use <b>＋ Batch</b> when one item arrived with more than one expiry date, and <b>🎁 Free goods</b> when the supplier gave extra of an item for free.';
   var fund = document.getElementById('rcFund');
   fund.readOnly = !RC_IS_ADV; fund.value = '';
   fund.placeholder = RC_IS_ADV ? 'Optional — leave blank if not yet known' : 'Auto-filled from PO';
@@ -2450,6 +2450,17 @@ function rcAddBatch(key){
   if (i < 0) return;
   var src = RC_ROWS[i];
   var copy = Object.assign({}, src, { key: ++RC_ROW_SEQ, first: false, qty: 0, exp: '', noExp: false, cancel: false, batchNo: '' });
+  var j = i + 1;
+  while (j < RC_ROWS.length && RC_ROWS[j].poLineId && RC_ROWS[j].poLineId === src.poLineId && !RC_ROWS[j].first) j++;
+  RC_ROWS.splice(j, 0, copy);
+  rcRenderRows();
+}
+// FREE GOODS: extra qty the supplier gave for free — same item, zero cost, not counted on the PO balance
+function rcAddFree(key){
+  var i = RC_ROWS.findIndex(function(r){ return r.key === key; });
+  if (i < 0) return;
+  var src = RC_ROWS[i];
+  var copy = Object.assign({}, src, { key: ++RC_ROW_SEQ, first: false, free: true, qty: 0, cost: 0, exp: '', noExp: false, cancel: false, batchNo: '', parts: null });
   var j = i + 1;
   while (j < RC_ROWS.length && RC_ROWS[j].poLineId && RC_ROWS[j].poLineId === src.poLineId && !RC_ROWS[j].first) j++;
   RC_ROWS.splice(j, 0, copy);
@@ -2532,25 +2543,28 @@ function rcRenderRows(){
       r.parts.map(function(p){ return esc(p.qty + ' ' + p.unit + ' ' + p.desc); }).join(', ') + '</div>';
     var brkBtn = canBrk ? '<button type="button" class="btn btn-out btn-sm" title="List the pieces inside this LOT" onclick="rcBrkOpen(' + k + ')">🧩 ' + (hasParts ? 'Edit breakdown' : 'Breakdown') + '</button>' : '';
     var batchBtn = hasParts ? '' : (r.locked || r.itemCode || r.desc) && !RC_CATERING ? '<button type="button" class="btn btn-out btn-sm" title="Same item, another expiry date" onclick="rcAddBatch(' + k + ')">＋ Batch</button>' : '';
+    var freeBtn = r.locked && r.first && !hasParts && !RC_CATERING && r.isCoded !== false && !noCode
+      ? '<button type="button" class="btn btn-out btn-sm" title="Supplier delivered extra of this item for FREE — stocked at zero cost, not counted on the PO balance" onclick="rcAddFree(' + k + ')">🎁 Free goods</button>' : '';
+    if (r.free) itemCell += '<div class="rc-sub" style="color:#8a2be2;font-weight:700">🎁 FREE GOODS — zero cost, not counted on the PO balance</div>';
     var delBtn = (!r.locked || !r.first) ? '<button type="button" class="btn btn-del btn-sm" onclick="rcRemoveRow(' + k + ')">✕</button>' : '';
     var poDescCell = r.locked && r.first
       ? '<div class="po-desc">' + esc(r.poDesc || r.desc) + (r.poUnit ? '<small>per PO: ' + esc(r.poUnit) + '</small>' : '') + '</div>'
-      : (r.locked ? '<span style="color:#aaa">↑ same line</span>' : '—');
-    return '<tr id="rcTr' + k + '"' + (r.cancel ? ' style="background:#fff8ec"' : '') + '>' +
+      : r.free ? '<span style="color:#8a2be2;font-weight:700">🎁 FREE GOODS</span>' : (r.locked ? '<span style="color:#aaa">↑ same line</span>' : '—');
+    return '<tr id="rcTr' + k + '"' + (r.cancel ? ' style="background:#fff8ec"' : r.free ? ' style="background:#f6efff"' : '') + '>' +
       '<td>' + n + '</td>' +
       '<td>' + poDescCell + '</td>' +
       '<td>' + itemCell + '</td>' +
       (!r.locked && !rcCoded() && r.first ? '<td><input type="text" id="rcUnitIn' + k + '" placeholder="pc, set…" value="' + esc(r.unit) + '" oninput="rcSet(' + k + ',\'unit\',this.value)" style="width:70px"/></td>'
         : '<td id="rcUnit' + k + '">' + esc(r.unit || '—') + '</td>') +
       '<td>' + (r.first && r.ordered != null ? r.ordered : '') + '</td>' +
-      '<td class="' + (r.first && r.balance != null ? balCls : '') + '">' + (r.first && r.balance != null ? r.balance : (r.locked ? '↑ same line' : '—')) + '</td>' +
+      '<td class="' + (r.first && r.balance != null ? balCls : '') + '">' + (r.first && r.balance != null ? r.balance : r.free ? 'free' : (r.locked ? '↑ same line' : '—')) + '</td>' +
       '<td><input type="number" min="0" step="1" value="' + (r.qty || 0) + '" oninput="rcSet(' + k + ',\'qty\',this.value)"/></td>' +
       '<td><input type="number" min="0" step="0.01" value="' + (r.cost || 0) + '" ' + (r.locked ? 'readonly' : '') + ' oninput="rcSet(' + k + ',\'cost\',this.value)"/></td>' +
       (RC_CATERING ? '<td style="color:#aaa">— not stocked —</td>' : hasParts ? '<td style="color:#1a5e20;font-size:.8rem">per piece (see breakdown)</td>' : '<td><div class="exp-wrap"><input type="date" id="rcExp' + k + '" value="' + esc(r.exp) + '" ' + (r.noExp ? 'disabled' : '') + ' onchange="rcSet(' + k + ',\'exp\',this.value)"/>' +
         '<label><input type="checkbox" ' + (r.noExp ? 'checked' : '') + ' onchange="rcSet(' + k + ',\'noExp\',this.checked)"/> No exp.</label></div></td>') +
       rcRemCell_(r) +
       '<td style="text-align:center">' + (r.locked && r.first ? '<input type="checkbox" ' + (r.cancel ? 'checked' : '') + ' onchange="rcSet(' + k + ',\'cancel\',this.checked)" style="width:auto"/>' : '—') + '</td>' +
-      '<td style="white-space:nowrap">' + brkBtn + ' ' + batchBtn + ' ' + delBtn + '</td></tr>';
+      '<td style="white-space:nowrap">' + brkBtn + ' ' + batchBtn + ' ' + freeBtn + ' ' + delBtn + '</td></tr>';
   }).join('');
 }
 
@@ -2619,7 +2633,7 @@ function rcBrkRemoveAll(){
 function groupIarItems(items){
   var order = [], byCode = {};
   items.forEach(function(it){
-    var k = it.code || ('~' + it.desc + '|' + it.unit);
+    var k = (it.code || ('~' + it.desc + '|' + it.unit)) + (it.free ? '|FREE' : '');
     if (!byCode[k]){ byCode[k] = { code: it.code, desc: it.desc, unit: it.unit, qty: 0 }; order.push(k); }
     byCode[k].qty += (Number(it.qty) || 0);
   });
@@ -2631,12 +2645,12 @@ function rcFormIarData(){
   var items = [];
   RC_ROWS.filter(function(r){ return r.itemCode && r.qty > 0; }).forEach(function(r){
     if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: '', desc: p.desc + ' (from LOT: ' + r.desc + ')', unit: p.unit, qty: p.qty }); });
-    else items.push({ code: r.itemCode, desc: r.desc, unit: r.unit, qty: r.qty });
+    else items.push({ code: r.itemCode, desc: r.desc + (r.free ? ' — FREE GOODS' : ''), unit: r.unit, qty: r.qty, free: !!r.free });
   });
   if (!items.length){ rcAlert('error', 'No items with Qty Received to preview.'); return null; }
   // Complete only if every PO line is fully delivered after this save, or has its balance cancelled.
   var byLine = {};
-  RC_ROWS.forEach(function(r){ if (r.locked){ byLine[r.poLineId] = byLine[r.poLineId] || { bal: r.balance, got: 0, cancel: false }; byLine[r.poLineId].got += r.qty; if (r.first && r.cancel) byLine[r.poLineId].cancel = true; } });
+  RC_ROWS.forEach(function(r){ if (r.locked && !r.free){ byLine[r.poLineId] = byLine[r.poLineId] || { bal: r.balance, got: 0, cancel: false }; byLine[r.poLineId].got += r.qty; if (r.first && r.cancel) byLine[r.poLineId].cancel = true; } });
   var allLines = (RC_PO_MAP[RC_PO] || { lines: [] }).lines;
   var complete = allLines.every(function(l){
     var b = byLine[l.po_line_id];
@@ -2678,7 +2692,7 @@ async function rcIarFromLog(receiveId){
     var po = await sb.from('po_headers').select('po_date,overall_status').eq('po_number', r0.po_number).maybeSingle();
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
       dateRec: r0.date, loc: r0.location, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
-      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.from_lot ? ' (from LOT: ' + x.from_lot + ')' : ''), unit: x.unit, qty: rcNum(x.qty) }; })) });
+      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.from_lot ? ' (from LOT: ' + x.from_lot + ')' : '') + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods }; })) });
   } catch(e){ rcAlert('error', 'Error: ' + esc(errText(e))); }
 }
 
@@ -2703,12 +2717,12 @@ function rcSave(){
     if (r.locked && r.isCoded === false){ rcAlert('error', 'Assign the code for “' + esc(r.poDesc || r.desc) + '” before receiving it.'); return; }
     var rParts = r.parts && r.parts.length ? r.parts : null;
     if (!rParts && !RC_CATERING && !r.noExp && !r.exp){ rcAlert('error', 'Enter the Expiry Date for ' + esc(r.itemCode || r.desc) + ', or tick “No exp.”'); return; }
-    if (r.locked){
+    if (r.locked && !r.free){
       perLine[r.poLineId] = (perLine[r.poLineId] || 0) + r.qty;
       var bal = RC_ROWS.filter(function(x){ return x.poLineId === r.poLineId && x.first; })[0].balance;
       if (perLine[r.poLineId] > bal){ rcAlert('error', esc(r.itemCode) + ': total Qty Received (' + perLine[r.poLineId] + ') is more than the PO balance (' + bal + ').'); return; }
     }
-    var itm = { po_line_id: r.poLineId, item_code: r.itemCode, description: r.desc, unit: r.unit, qty_received: r.qty, unit_cost: r.cost, expiry_date: (r.noExp || RC_CATERING || rParts) ? '' : r.exp, remarks: String(r.remarks || '').trim(), batch_no: rcShowBatch_() ? String(r.batchNo || '').trim() : '' };
+    var itm = { po_line_id: r.free ? null : r.poLineId, free_goods: !!r.free, free_of_line: r.free ? r.poLineId : null, item_code: r.itemCode, description: r.desc, unit: r.unit, qty_received: r.qty, unit_cost: r.free ? 0 : r.cost, expiry_date: (r.noExp || RC_CATERING || rParts) ? '' : r.exp, remarks: String(r.remarks || '').trim(), batch_no: rcShowBatch_() ? String(r.batchNo || '').trim() : '' };
     if (rParts) itm.parts = rParts.map(function(p){ return { description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '' }; });
     items.push(itm);
   }
@@ -2871,7 +2885,7 @@ function rcRenderReceipts(){
   var shown = rows.slice(0, MAX_ROWS);
   document.getElementById('rcTbRcv').innerHTML = shown.length ? shown.map(function(r){
     return '<tr><td class="nowrap">' + esc(r.date) + '</td><td class="nowrap">' + esc(r.receive_id) + (r.iar_no ? '<div class="rc-sub">IAR ' + esc(r.iar_no) + '</div>' : '') + (r.converted_from ? '<div class="rc-sub">from ' + esc(r.converted_from) + '</div>' : '') + '</td>' +
-      '<td class="nowrap">' + esc(r.po_number) + '</td><td>' + esc(r.item_code) + '</td><td>' + esc(r.description) + rcRemSub_(r.remarks, r.batch_no) + '</td><td>' + esc(r.unit) + '</td>' +
+      '<td class="nowrap">' + esc(r.po_number) + '</td><td>' + esc(r.item_code) + '</td><td>' + esc(r.description) + (r.free_goods ? '<div class="rc-sub" style="color:#8a2be2;font-weight:700">🎁 FREE GOODS</div>' : '') + rcRemSub_(r.remarks, r.batch_no) + '</td><td>' + esc(r.unit) + '</td>' +
       '<td>' + r.qty_received + '</td><td>' + rcNum(r.unit_cost).toFixed(2) + '</td><td class="nowrap">' + esc(r.expiry_date || '—') + '</td><td>' + esc(r.supplier) + '</td>' +
       '<td>' + esc(r.invoice_no || '') + '</td><td>' + esc(r.location || '') + '</td><td>' + esc(r.encoded_by || '') + '</td>' +
       '<td><button class="iar-gen-btn" onclick="rcIarFromLog(\'' + esc(r.receive_id) + '\')">🖨️ IAR</button></td></tr>';
@@ -4941,7 +4955,7 @@ async function apRcvOpen(key){
     var h = await sb.from('receipts').select('*').eq('receive_id', id).maybeSingle();
     if (h.error) throw h.error;
     if (!h.data){ apMsg('err', 'Receipt "' + esc(id) + '" was not found.'); return; }
-    var lines = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receipt_line_id,item_code,description,unit,qty_received,unit_cost,expiry_date,location,remarks,batch_no').eq('receive_id', id).order('receipt_line_id'); });
+    var lines = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receipt_line_id,item_code,description,unit,qty_received,unit_cost,expiry_date,location,remarks,batch_no,free_goods').eq('receive_id', id).order('receipt_line_id'); });
     var ids = lines.map(function(l){ return l.receipt_line_id; });
     var lots = ids.length ? await fetchAll(function(){ return sb.from('inventory_lots').select('receipt_line_id,qty_in,qty_on_hand').in('receipt_line_id', ids).order('id'); }) : [];
     var issued = {}; lots.forEach(function(l){ issued[l.receipt_line_id] = (issued[l.receipt_line_id] || 0) + apNum(l.qty_in) - apNum(l.qty_on_hand); });
@@ -4966,7 +4980,7 @@ function apRcvRender(){
     '<div class="ap-h">Items received</div><div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>Item</th><th>Unit</th><th>Qty Received</th><th>Already Issued</th><th>Unit Cost</th><th>Expiry</th><th>Remarks / Brand</th><th>Batch/Lot #</th><th>Remove</th></tr></thead><tbody>';
   c.lines.forEach(function(l){
     var id = l.receipt_line_id, del = !!c.del[id], iss = c.issued[id] || 0, pp = c.parts[id];
-    html += '<tr class="' + (del ? 'del' : '') + '"><td>' + (l.item_code.indexOf('AUTO-') === 0 ? '' : '<b>' + esc(l.item_code) + '</b> ') + esc(l.description) +
+    html += '<tr class="' + (del ? 'del' : '') + '"><td>' + (l.item_code.indexOf('AUTO-') === 0 ? '' : '<b>' + esc(l.item_code) + '</b> ') + esc(l.description) + (l.free_goods ? ' <span class="ap-tag" style="background:#f0e6ff;color:#6a1fb0">🎁 FREE GOODS</span>' : '') +
         (pp ? '<div class="ap-ro" style="font-size:.78rem;margin-top:3px">🧩 Breakdown: ' + pp.map(function(p){ return esc(p.qty + ' ' + (p.unit || '') + ' ' + p.description); }).join(', ') + '</div>' : '') + '</td><td>' + esc(l.unit || '') + '</td>' +
       '<td><input type="number" min="0" id="apRlQ' + id + '" value="' + l.qty_received + '"' + (pp ? ' readonly title="LOT with a breakdown — remove the line and receive again to change it"' : '') + '/></td><td>' + (iss ? '<b>' + iss + '</b>' + (pp ? ' pc' : '') : '0') + '</td>' +
       '<td><input type="number" min="0" step="0.01" id="apRlU' + id + '" value="' + l.unit_cost + '"/></td>' +
