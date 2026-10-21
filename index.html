@@ -220,6 +220,8 @@ tr.row-unclaimed{background:#fffaf0}
 #receiveMain .sc-drop li:hover{background:#e8f0fb;color:#1a3a5c}
 #receiveMain .sc-drop li.nr{color:#aaa;cursor:default;font-style:italic}
 #receiveMain .tbl-wrap{overflow-x:auto}
+#rcLog .tbl-wrap{max-height:62vh;overflow:auto;border:1px solid #e8eef5;border-radius:8px}
+#rcLog .tbl thead th{position:sticky;top:0;z-index:2}
 #receiveMain .tbl{width:100%;border-collapse:collapse;font-size:.82rem}
 #receiveMain .tbl th{background:#f5f8fc;color:#555;font-weight:600;padding:8px 6px;text-align:left;border-bottom:2px solid #e8eef5;white-space:nowrap}
 #receiveMain .tbl td{padding:5px 5px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
@@ -1349,6 +1351,8 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
 
     <div class="mo-actions">
       <button class="btn-cancel" onclick="closeEncodeModal()">Cancel</button>
+      <button class="btn-cancel" id="encDelDraft" style="display:none;background:#fdeceb;color:#c0392b" onclick="deleteEncDraft()">🗑 Delete draft</button>
+      <button class="btn-cancel" id="encSaveDraft" style="background:#fff4e0;color:#8a5a00" onclick="submitEncodeForm(true)">📝 Save Draft</button>
       <button class="btn-confirm" onclick="submitEncodeForm()">Submit Request</button>
     </div>
   </div>
@@ -1749,7 +1753,7 @@ async function loadReqLog(){
   document.getElementById('tbReqLog').innerHTML = '<tr><td colspan="12">Loading…</td></tr>';
   try {
     var rows = await fetchAll(function(){
-      var q = sb.from('v_ris_lines').select('*').eq('status','Pending');
+      var q = sb.from('v_ris_lines').select('*').in('status', ['Pending','Draft']);
       if (ME.unit) q = q.eq('ris_unit', ME.unit);
       return q.order('date', { ascending:false }).order('ris_no').order('id');
     });
@@ -1792,13 +1796,15 @@ async function loadIssLog(){
 }
 
 function logRow_(r, clickable){
+  var draft = r.status === 'Draft';
   var risCell = clickable
-    ? '<a href="#" class="ris-link" data-risno="'+esc(r.risNo)+'">'+esc(r.risNo)+'</a>'
-    : esc(r.risNo);
+    ? '<a href="#" class="ris-link"' + (draft ? ' data-draft="1" style="color:#d11a1a;border-bottom-color:#d11a1a" title="DRAFT — click to edit or submit"' : '') + ' data-risno="'+esc(r.risNo)+'">'+esc(r.risNo)+'</a>'
+    : (draft ? '<span style="color:#d11a1a;font-weight:700">' + esc(r.risNo) + '</span>' : esc(r.risNo));
+  if (draft) risCell += '<div><span style="font-size:10px;font-weight:800;color:#fff;background:#d11a1a;border-radius:3px;padding:0 5px">DRAFT</span></div>';
   return '<tr><td>'+esc(r.date)+'</td><td>'+risCell+risNote_(r)+'</td><td>'+esc(r.endUser)+'</td>'+
     '<td>'+esc(r.itemCode)+' — '+esc(r.itemDescription)+'</td><td>'+esc(r.qty)+'</td><td>'+esc(r.qtyIssued==null?'—':r.qtyIssued)+'</td>'+
     '<td>'+esc(r.location||'—')+'</td><td>'+esc(r.locationIncharge||'—')+'</td><td>'+esc(r.claimedBy||'—')+'</td>'+
-    '<td>'+esc(r.status)+'</td><td>'+esc(r.source||'—')+'</td><td>'+esc(r.sourceExpiry||'—')+'</td></tr>';
+    '<td'+(draft ? ' style="color:#d11a1a;font-weight:700"' : '')+'>'+esc(r.status)+'</td><td>'+esc(r.source||'—')+'</td><td>'+esc(r.sourceExpiry||'—')+'</td></tr>';
 }
 
 // Small note under the RIS No: the unit (for all-units users) and the remarks (requestor / PAR No.).
@@ -2038,8 +2044,11 @@ async function exportXlsx(){
 }
 
 // ── NEW REQUEST (encode) ────────────────────────────────────────────────────
+var ENC_DRAFT_OF = null;
 async function openEncodeModal(){
-  ENC_CART = [];
+  ENC_CART = []; ENC_DRAFT_OF = null;
+  document.querySelector('#moEncode h3').textContent = '➕ New Request (Encode)';
+  document.getElementById('encDelDraft').style.display = 'none';
   renderEncCart();
   document.getElementById('encErr').style.display='none';
   document.getElementById('encRisNo').value = '';
@@ -2093,7 +2102,33 @@ async function encUnitChanged(){
   try { await encLoadItems_(); } catch(e){ showEncErr('Error: ' + errText(e)); }
 }
 
-async function submitEncodeForm(){
+// open a DRAFT RIS again (red RIS No in Request Transactions) — update 49
+async function openEncDraft(risNo){
+  var rows = REQ_LOG_DATA.filter(function(r){ return r.risNo === risNo; });
+  if (!rows.length) return;
+  await openEncodeModal();
+  var r0 = rows[0];
+  ENC_DRAFT_OF = risNo;
+  document.querySelector('#moEncode h3').textContent = '📝 Draft RIS ' + risNo + ' — edit, then Save Draft or Submit';
+  document.getElementById('encDelDraft').style.display = '';
+  document.getElementById('encRisNo').value = risNo;
+  document.getElementById('encDate').value = r0.date || TODAY_STR;
+  var dSel = document.getElementById('encDept');
+  if (r0.endUser && !Array.prototype.some.call(dSel.options, function(o){ return o.value === r0.endUser; })) dSel.innerHTML += '<option value="' + esc(r0.endUser) + '">' + esc(r0.endUser) + '</option>';
+  dSel.value = r0.endUser || '';
+  var uSel = document.getElementById('encUnit');
+  if (r0.risUnit && !ME.unit){ uSel.value = r0.risUnit; document.getElementById('encRemarksBox').style.display = r0.risUnit === 'EQUIPMENT' ? '' : 'none'; try { await encLoadItems_(); } catch(e){} }
+  document.getElementById('encRemarks').value = r0.remarks || '';
+  ENC_CART = rows.map(function(r){ return { code: r.itemCode, description: r.itemDescription, unit: r.unit || '', qty: Number(r.qty) || 0 }; });
+  renderEncCart();
+}
+async function deleteEncDraft(){
+  if (!ENC_DRAFT_OF || !confirm('Delete draft RIS ' + ENC_DRAFT_OF + '? This cannot be undone.')) return;
+  var res = await sb.rpc('delete_ris_draft', { p_ris_no: ENC_DRAFT_OF });
+  if (res.error){ showEncErr(errText(res.error)); return; }
+  closeEncodeModal(); showMsg('ok', 'Draft RIS ' + ENC_DRAFT_OF + ' deleted.'); ENC_DRAFT_OF = null; loadReqLog();
+}
+async function submitEncodeForm(asDraft){
   document.getElementById('encErr').style.display='none';
   var dept = document.getElementById('encDept').value;
   var risNo = document.getElementById('encRisNo').value.trim();
@@ -2105,21 +2140,23 @@ async function submitEncodeForm(){
   if (!encUnit){ showEncErr('Select the unit.'); return; }
   if (!ENC_CART.length){ showEncErr('Add at least one item.'); return; }
 
-  var btn = document.querySelector('#moEncode .btn-confirm');
-  btn.disabled = true; btn.textContent = 'Submitting…';
-  var res = await sb.rpc('submit_ris', { p: {
-    ris_no: risNo, release_date: dateStr, end_user: dept, unit: encUnit,
+  var btn = asDraft ? document.getElementById('encSaveDraft') : document.querySelector('#moEncode .btn-confirm'), btnTxt = btn.textContent;
+  btn.disabled = true; btn.textContent = asDraft ? 'Saving…' : 'Submitting…';
+  var res = await sb.rpc(asDraft ? 'save_ris_draft' : 'submit_ris', { p: {
+    ris_no: risNo, release_date: dateStr, end_user: dept, unit: encUnit, draft_of: ENC_DRAFT_OF || '',
     remarks: encUnit === 'EQUIPMENT' ? document.getElementById('encRemarks').value.trim() : '',
     items: ENC_CART.map(function(c){ return { item_code: c.code, qty: c.qty }; })
   }});
-  btn.disabled = false; btn.textContent = 'Submit Request';
+  btn.disabled = false; btn.textContent = btnTxt;
+  if (res.error && /save_ris_draft|ris_status_check/.test(errText(res.error))){ showEncErr(errText(res.error) + ' — has update 49 been run?'); return; }
   if (res.error){
     var m = errText(res.error);
     showEncErr(m);
     if (/already used/i.test(m)) alert(m);
     return;
   }
-  closeEncodeModal();
+  closeEncodeModal(); ENC_DRAFT_OF = null;
+  if (asDraft){ showMsg('ok', '📝 Draft RIS ' + res.data.ris_no + ' saved — ' + res.data.item_count + ' item(s). It is in Request Transactions in red; click it to continue.'); loadReqLog(); return; }
   showMsg('ok', 'RIS ' + res.data.ris_no + ' encoded for ' + res.data.end_user + ' — ' + res.data.item_count + ' item(s).');
   loadReqLog();
 }
@@ -2209,7 +2246,8 @@ document.addEventListener('DOMContentLoaded', async function(){
     var a = ev.target.closest('.ris-link');
     if (!a) return;
     ev.preventDefault();
-    openEditRisModal(a.getAttribute('data-risno'));
+    if (a.getAttribute('data-draft')) openEncDraft(a.getAttribute('data-risno'));
+    else openEditRisModal(a.getAttribute('data-risno'));
   });
   document.getElementById('tbIssLog').addEventListener('change', function(ev){
     var chk = ev.target.closest('.rsmi-chk');
@@ -2272,13 +2310,30 @@ function rcNum(v){ var n = Number(v); return isNaN(n) ? 0 : n; }
 
 // Searchable combo (same behaviour as the old app). getData() is called on
 // every keystroke, so the list can change (e.g. Convert modal's PO filter).
-function rcCombo(baseId, getData, onPick){
+function rcCombo(baseId, getData, onPick, addNew){
   var inp = document.getElementById(baseId + '_in'), ul = document.getElementById(baseId + '_ul');
   function render(q){
     var data = getData();
     var arr = q ? data.filter(function(s){ return s.toLowerCase().indexOf(q.toLowerCase()) !== -1; }) : data;
     arr = arr.slice(0, 200);
-    ul.innerHTML = arr.length ? '' : '<li class="nr">No results</li>';
+    ul.innerHTML = arr.length || addNew ? '' : '<li class="nr">No results</li>';
+    // "＋ Add new …" — adds the typed name to the master list (addNew = { label, add: async fn(name) → saved name })
+    var typed = String(q || '').trim();
+    if (addNew && (!typed || !data.some(function(s){ return s.toUpperCase() === typed.toUpperCase(); }))){
+      var ad = document.createElement('li');
+      ad.style.cssText = 'color:#1a7f37;font-weight:700;border-bottom:1px solid #e8eef5';
+      ad.textContent = typed ? '＋ Add "' + typed.toUpperCase() + '" as a new ' + addNew.label : '＋ Add a new ' + addNew.label + ' (type the name first)';
+      ad.addEventListener('mousedown', async function(ev){
+        ev.preventDefault();
+        var name = typed || (window.prompt('New ' + addNew.label + ':') || '').trim();
+        if (!name) return;
+        if (!window.confirm('Add "' + name.toUpperCase() + '" to the ' + addNew.label + ' list?')) return;
+        try { var saved = await addNew.add(name); inp.value = saved; ul.classList.remove('open'); if (onPick) onPick(saved); }
+        catch(e){ alert(errText(e)); }
+      });
+      ul.appendChild(ad);
+    }
+    if (!arr.length && !typed && !addNew) ul.innerHTML = '<li class="nr">No results</li>';
     arr.forEach(function(txt){
       var li = document.createElement('li');
       li.textContent = txt;
@@ -3142,8 +3197,8 @@ async function poInit(){
     await poLoadOpts();
     document.getElementById('poDate').value = ymd(new Date());
     document.getElementById('poSign').textContent = todayMDY() + ' – ' + ME.username;
-    rcCombo('poSup', function(){ return PO_SUPS; }, null);
-    rcCombo('poEU', function(){ return PO_EUS; }, null);
+    rcCombo('poSup', function(){ return PO_SUPS; }, null, { label: 'supplier', add: function(n){ return poAddMaster_('supplier', n); } });
+    rcCombo('poEU', function(){ return PO_EUS; }, null, { label: 'end user / area', add: function(n){ return poAddMaster_('end_user', n); } });
     rcCombo('poItem', function(){ return PO_ITEM_KEYS; }, function(txt){
       if (!txt){ PO_SEL_ITEM = null; return; }
       var code = txt.split(' — ')[0].trim();
@@ -3189,6 +3244,18 @@ function poFillOpt(kind){
   el.innerHTML = poOptHtml(kind, el.value === '__new' ? '' : el.value, d[1]);
 }
 // a dropdown's "＋ Add new…" was picked: ask for the value, save it for everyone, select it
+// adds a new supplier / end user from PO Creation (same as Master Lists → Add; logged in the Edit Log)
+async function poAddMaster_(kind, name){
+  name = String(name || '').trim().toUpperCase();
+  var p = kind === 'supplier' ? { supplier_name: name, status: 'Active' } : { end_user_name: name, status: 'Active' };
+  var r = await sb.rpc('master_save', { p_kind: kind, p: p });
+  if (r.error) throw r.error;
+  var list = kind === 'supplier' ? PO_SUPS : PO_EUS;
+  if (list.indexOf(name) === -1){ list.push(name); list.sort(); }
+  if (kind === 'supplier' && typeof RC_SUPPLIERS !== 'undefined' && RC_SUPPLIERS.indexOf(name) === -1) RC_SUPPLIERS.push(name);
+  poMsg('✅ Added ' + (kind === 'supplier' ? 'supplier' : 'end user') + ' "' + name + '" to the master list.', 'ok');
+  return name;
+}
 async function poOptPicked(el, kind){
   if (el.value !== '__new'){ el.dataset.prev = el.value; el.dataset.auto = ''; return; }
   var ask = kind === 'ITEM_CLASS' ? 'New Category (as printed on the SOP), e.g. LABORATORY REAGENTS AND SUPPLIES:'
@@ -4834,10 +4901,27 @@ async function apPoOpen(key){
     if (!h.data){ apMsg('err', 'PO "' + esc(po) + '" was not found.'); return; }
     var lines = await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,item_code,description,unit,end_user,qty_ordered,qty_delivered,qty_cancelled,unit_cost,balance,delivery_status,po_description,po_unit,is_coded').eq('po_number', po).order('po_line_id'); });
     if (PO_GROUPS_ON) await poLineGroups_(po, lines, 'po_line_id');
-    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [] };
+    var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,po_line_id,date,iar_no').eq('po_number', po).order('date').order('receive_id'); });
+    var rcvByLine = {}; rl.forEach(function(x){ if (!x.po_line_id) return; var a = rcvByLine[x.po_line_id] = rcvByLine[x.po_line_id] || [];
+      if (!a.some(function(y){ return y.id === x.receive_id; })) a.push({ id: x.receive_id, d: x.date, iar: x.iar_no }); });
+    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {} };
     if (!PO_OPTS.MODE.length) await poLoadOpts();
     apPoRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
+}
+function apPoFreeOk_(h, l){
+  return apNum(l.qty_delivered) > 0 && h.category !== 'CATERING' && !isInOut(h.txn_type) && !apNoCode_(l) &&
+         (AP_CUR.rcvByLine[l.po_line_id] || []).length > 0 && ME.role === 'Approver';
+}
+function apPoFreeOpen(id){ var r = AP_CUR.rcvByLine[id] || []; AP_CUR.free[id] = { q: '', e: '', n: false, b: '', rcv: r.length ? r[r.length - 1].id : '' }; apPoRender(); }
+async function apPoFreeSave(id){
+  var f = AP_CUR.free[id], po = AP_CUR.h.po_number;
+  if (!(apNum(f.q) > 0)){ apMsg('err', 'Type the free goods qty.'); return; }
+  if (!f.rcv){ apMsg('err', 'Pick the receipt (IAR) to add the free goods to.'); return; }
+  var r = await sb.rpc('apv_receipt_add_lines', { p: { receive_id: f.rcv, items: [{ po_line_id: id, qty_received: apNum(f.q), free_goods: true, expiry_date: f.n ? '' : (f.e || ''), no_expiry: !!f.n, batch_no: f.b || '' }] } });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_receipt_add_lines/.test(errText(r.error)) ? ' — has update 48 been run?' : '')); return; }
+  await apPoOpen(po);
+  apMsg('ok', '✅ 🎁 Free goods added to ' + esc(r.data.receive_id) + ' — on its IAR as "— FREE GOODS", in stock at zero cost. The PO balance did not change.');
 }
 function apPoRender(){
   var c = AP_CUR, h = c.h, coded = AP_UNITS_CODED.indexOf(h.category) !== -1 || h.category === 'EQUIPMENT' || h.category === 'HARDWARE';
@@ -4881,7 +4965,22 @@ function apPoRender(){
       '<td><input type="number" min="0" id="apPlQ' + l.po_line_id + '" value="' + l.qty_ordered + '"/></td><td>' + l.qty_delivered + '</td>' +
       '<td><input type="number" min="0" id="apPlC' + l.po_line_id + '" value="' + l.qty_cancelled + '"/></td>' +
       '<td><input type="number" min="0" step="0.01" id="apPlU' + l.po_line_id + '" value="' + l.unit_cost + '"/></td><td>' + l.balance + '</td><td>' + esc(l.delivery_status) + '</td>' +
-      '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') + '</td></tr>';
+      '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') +
+        (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') + '</td></tr>';
+    var fg = c.free[l.po_line_id];
+    if (fg){
+      var rcvs = (c.rcvByLine[l.po_line_id] || []).slice().reverse();
+      html += '<tr style="background:#f6efff"><td colspan="11"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+        '<b style="color:#6a1fb0;align-self:center">🎁 Free goods — ' + esc(l.po_description || l.description) + '</b>' +
+        '<div class="ap-f" style="margin:0"><label>Free qty</label><input type="number" min="0" value="' + esc(fg.q || '') + '" oninput="AP_CUR.free[' + l.po_line_id + '].q=this.value" style="width:90px"/></div>' +
+        '<div class="ap-f" style="margin:0"><label>Expiry</label><input type="date" value="' + esc(fg.e || '') + '" oninput="AP_CUR.free[' + l.po_line_id + '].e=this.value"/></div>' +
+        '<label style="align-self:center;font-size:.8rem"><input type="checkbox" style="width:auto"' + (fg.n ? ' checked' : '') + ' onchange="AP_CUR.free[' + l.po_line_id + '].n=this.checked"/> No exp.</label>' +
+        '<div class="ap-f" style="margin:0"><label>Batch/Lot #</label><input type="text" value="' + esc(fg.b || '') + '" oninput="AP_CUR.free[' + l.po_line_id + '].b=this.value" style="width:120px"/></div>' +
+        '<div class="ap-f" style="margin:0"><label>Add to receipt (IAR)</label><select onchange="AP_CUR.free[' + l.po_line_id + '].rcv=this.value">' +
+          rcvs.map(function(x){ return '<option value="' + esc(x.id) + '"' + (fg.rcv === x.id ? ' selected' : '') + '>' + esc(x.id) + (x.iar ? ' · IAR ' + esc(x.iar) : '') + ' · ' + esc(toMDY(x.d)) + '</option>'; }).join('') + '</select></div>' +
+        '<button class="ap-btn sm green" onclick="apPoFreeSave(' + l.po_line_id + ')">💾 Save free goods</button>' +
+        '<button class="ap-btn sm gray" onclick="delete AP_CUR.free[' + l.po_line_id + '];apPoRender()">✕</button></div></td></tr>';
+    }
   });
   c.add.forEach(function(a, i){
     html += '<tr style="background:#f3fbf5"><td>' + (PO_GROUPS_ON && poProjUnit(h.category) ? '<input type="text" placeholder="📅 heading (optional)" value="' + esc(a.group || '') + '" oninput="AP_CUR.add[' + i + '].group=this.value" style="font-size:.75rem;margin-bottom:3px"/>' : '') +
@@ -4973,7 +5072,12 @@ async function apRcvOpen(key){
     var issued = {}; lots.forEach(function(l){ issued[l.receipt_line_id] = (issued[l.receipt_line_id] || 0) + apNum(l.qty_in) - apNum(l.qty_on_hand); });
     var pr = await fetchAll(function(){ return sb.from('v_iar_lines').select('receipt_line_id,part_id,item_code,description,unit,qty').eq('receive_id', id).not('part_id', 'is', null).order('part_id'); });
     var parts = {}; pr.forEach(function(p){ (parts[p.receipt_line_id] = parts[p.receipt_line_id] || []).push(p); });
-    AP_CUR = { kind: 'rcv', h: h.data, lines: lines, issued: issued, parts: parts, stocked: lots.length > 0, del: {} };
+    var poLines = [], poH = null;
+    if (h.data.receipt_type === 'PO' && h.data.po_number){
+      poLines = await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,item_code,description,po_description,unit,qty_ordered,qty_delivered,qty_cancelled,balance').eq('po_number', h.data.po_number).order('po_line_id'); });
+      var ph = await sb.from('po_headers').select('category,txn_type').eq('po_number', h.data.po_number).maybeSingle(); poH = ph.data;
+    }
+    AP_CUR = { kind: 'rcv', h: h.data, lines: lines, issued: issued, parts: parts, stocked: lots.length > 0, del: {}, poLines: poLines, poH: poH, addOpen: false, addv: {} };
     apRcvRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
 }
@@ -5003,8 +5107,50 @@ function apRcvRender(){
   });
   html += '</tbody></table></div><p class="ap-hint" style="margin-top:8px">Received qty can\'t go below what was already issued. Changing it also updates the PO balance, the batch and the stock card.</p>' +
     '<div class="ap-actions"><button class="ap-btn green" onclick="apRcvSave()">💾 Save receipt changes</button>' +
-    (h.receipt_type === 'PO' ? '<button class="ap-btn gray ap-print" onclick="rcIarFromLog(\'' + esc(h.receive_id) + '\')">🖨 View / Print IAR</button>' : '') + '</div>';
+    (h.receipt_type === 'PO' ? '<button class="ap-btn gray ap-print" onclick="rcIarFromLog(\'' + esc(h.receive_id) + '\')">🖨 View / Print IAR</button>' : '') +
+    (h.receipt_type === 'PO' && c.poLines && c.poLines.length ? '<button class="ap-btn gray" onclick="AP_CUR.addOpen=!AP_CUR.addOpen;apRcvAddRender()">＋ Add item / 🎁 Free goods</button>' : '') + '</div>' +
+    '<div id="apRcvAdd"></div>';
   document.getElementById('apEd').innerHTML = html; apLock();
+  apRcvAddRender();
+}
+// ── add PO items / FREE GOODS to this receipt (update 48) ─────────────────────
+function apRcvStocked_(c){ var ph = c.poH || {}; return ph.category !== 'CATERING' && !isInOut(ph.txn_type); }
+function apRcvAddRender(){
+  var c = AP_CUR, box = document.getElementById('apRcvAdd'); if (!box || c.kind !== 'rcv') return;
+  if (!c.addOpen){ box.innerHTML = ''; return; }
+  var stocked = apRcvStocked_(c), V = function(id, k){ return (c.addv[id] || {})[k]; };
+  var html = '<div class="sx-card" style="margin-top:12px;border:1px solid #d9c8f5;background:#fbf8ff"><div class="ap-h">＋ Add to receipt ' + esc(c.h.receive_id) + ' — PO ' + esc(c.h.po_number) + '</div>' +
+    '<p class="ap-hint" style="margin:0 0 8px"><b>Add qty</b> = more delivered on this receipt (counts on the PO, up to the balance). ' +
+      (stocked ? '<b>🎁 Free goods</b> = extra the supplier gave for free — stocked at zero cost, the PO balance does not change. ' : '<b>Free goods</b> are only for stocked POs. ') +
+      'Same date, supplier, invoice and location as this receipt.</p>' +
+    '<div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>PO item</th><th>Ordered</th><th>Delivered</th><th>Balance</th><th>Add qty</th>' + (stocked ? '<th>🎁 Free goods</th><th>Expiry</th><th>No exp.</th>' : '') + '<th>Batch/Lot #</th><th>Remarks / Brand</th></tr></thead><tbody>';
+  c.poLines.forEach(function(l){
+    var id = l.po_line_id, noCode = String(l.item_code).indexOf('AUTO-') === 0 || String(l.item_code).indexOf('TMP-') === 0;
+    var inp = function(k, type, extra){ return '<input type="' + type + '" value="' + esc(V(id, k) || '') + '" oninput="apRcvAddSet(' + id + ',\'' + k + '\',this.value)" ' + (extra || '') + '/>'; };
+    html += '<tr><td>' + (noCode ? '' : '<b>' + esc(l.item_code) + '</b> ') + esc(l.po_description || l.description) + '<div class="ap-ro">' + esc(l.unit || '') + '</div></td>' +
+      '<td>' + l.qty_ordered + '</td><td>' + l.qty_delivered + '</td><td><b>' + l.balance + '</b></td>' +
+      '<td>' + (apNum(l.balance) > 0 ? inp('q', 'number', 'min="0" max="' + l.balance + '" style="width:80px"') : '<span class="ap-ro">—</span>') + '</td>' +
+      (stocked ? '<td>' + (noCode ? '<span class="ap-ro">code first</span>' : inp('f', 'number', 'min="0" style="width:80px;border-color:#b98be8"')) + '</td>' +
+        '<td>' + inp('e', 'date') + '</td><td style="text-align:center"><input type="checkbox"' + (V(id, 'n') ? ' checked' : '') + ' onchange="apRcvAddSet(' + id + ',\'n\',this.checked)" style="width:auto"/></td>' : '') +
+      '<td>' + inp('b', 'text', 'maxlength="60" style="width:110px"') + '</td><td>' + inp('r', 'text', 'maxlength="200"') + '</td></tr>';
+  });
+  html += '</tbody></table></div><div class="ap-actions"><button class="ap-btn green" onclick="apRcvAddSave()">💾 Add to this receipt</button>' +
+    '<button class="ap-btn gray" onclick="AP_CUR.addOpen=false;AP_CUR.addv={};apRcvAddRender()">Cancel</button></div></div>';
+  box.innerHTML = html;
+}
+function apRcvAddSet(id, k, v){ var c = AP_CUR; (c.addv[id] = c.addv[id] || {})[k] = v; }
+async function apRcvAddSave(){
+  var c = AP_CUR, stocked = apRcvStocked_(c), items = [];
+  c.poLines.forEach(function(l){
+    var a = c.addv[l.po_line_id] || {}, base = { po_line_id: l.po_line_id, expiry_date: a.n ? '' : (a.e || ''), no_expiry: !!a.n, batch_no: a.b || '', remarks: a.r || '' };
+    if (apNum(a.q) > 0) items.push(Object.assign({}, base, { qty_received: apNum(a.q), free_goods: false }));
+    if (stocked && apNum(a.f) > 0) items.push(Object.assign({}, base, { qty_received: apNum(a.f), free_goods: true }));
+  });
+  if (!items.length){ apMsg('err', 'Type an Add qty or a Free goods qty on at least one item.'); return; }
+  var r = await sb.rpc('apv_receipt_add_lines', { p: { receive_id: c.h.receive_id, items: items } });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_receipt_add_lines/.test(errText(r.error)) ? ' — has update 48 been run?' : '')); return; }
+  await apRcvOpen(c.h.receive_id);
+  apMsg('ok', '✅ Added ' + r.data.added + ' line(s) to ' + esc(r.data.receive_id) + (r.data.free_goods ? ' (🎁 ' + r.data.free_goods + ' free goods)' : '') + ' — on the IAR, the stock card and the Edit Log.');
 }
 async function apRcvSave(){
   var c = AP_CUR;
