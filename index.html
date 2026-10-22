@@ -4117,6 +4117,7 @@ async function ptLoad(quiet){
       }) : Promise.resolve([])
     ]);
     PT_ENTRIES = res[0]; PT_LINES = res[1];
+    try { PT_NOA = {}; (await fetchAll(function(){ return sb.from('po_headers').select('po_number,noa_number').order('po_number'); })).forEach(function(h){ if (h.noa_number) PT_NOA[ptKey(h.po_number)] = String(h.noa_number).trim(); }); } catch(eN){}
     if (PT_TABS.some(function(t){ return t.key === 'summary'; })) await ptAsLoad();
     try { PT_DOCS = await fetchAll(function(){ return sb.from('v_po_documents').select('id,doc_type,date_received,po_number,matched_po,new_deadline,note').not('matched_po', 'is', null).order('date_received').order('id'); }); } catch(e2){ PT_DOCS = []; }
     document.getElementById('ptUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -4133,6 +4134,23 @@ function ptStamp(e){
   if (!e) return '';
   return [e.last_updated_at, e.date_returned, e.date_transmitted, e.date_accepted, e.date_inspected, e.date_sent_inspection, e.date_created]
     .map(function(v){ return v ? String(v) : ''; }).sort().pop() || '';
+}
+// NOA # per PO (from the PO header) + the NOA filter
+var PT_NOA = {}, PT_NOA_Q = '', PT_NOA_MODE = '';
+function ptNoaOf(po){ return PT_NOA[ptKey(po)] || ''; }
+function ptNoaOk(po){
+  var n = ptNoaOf(po);
+  if (PT_NOA_MODE === 'WITH' && !n) return false;
+  if (PT_NOA_MODE === 'WITHOUT' && n) return false;
+  var q = PT_NOA_Q.trim().toLowerCase();
+  return !q || n.toLowerCase().indexOf(q) !== -1;
+}
+function ptNoaBar(){
+  return '<select onchange="PT_NOA_MODE=this.value;ptOnNoa()"><option value="">NOA: all POs</option><option value="WITH"' + (PT_NOA_MODE === 'WITH' ? ' selected' : '') + '>With NOA</option><option value="WITHOUT"' + (PT_NOA_MODE === 'WITHOUT' ? ' selected' : '') + '>Without NOA</option></select>' +
+    '<input type="text" id="ptNoaQ" placeholder="Filter NOA #…" value="' + esc(PT_NOA_Q) + '" oninput="PT_NOA_Q=this.value;ptOnNoa()" style="max-width:180px"/>';
+}
+function ptOnNoa(){
+  if (PT_TAB === 'summary') ptRenderSummary();
 }
 function ptNewestFirst(list){ return list.slice().sort(function(a, b){ var x = ptStamp(a), y = ptStamp(b); return x < y ? 1 : x > y ? -1 : 0; }); }
 function ptFilter(key){
@@ -4156,7 +4174,7 @@ function ptRender(){
       '<div class="pt-hint">One row per PO, every unit, at any status — receiving, inspection, acceptance, then For SOP, Pending, Transmitted to CAO, Returned by Acctg, Processed and Filed (records from the old PO Monitoring app included). The PO with the latest status change is on top. Click a PO Status to open the PO: its status trail, lacking requirements and items.</div>' +
       '<div class="pt-filters"><input type="text" id="ptSearch" placeholder="Search PO No, supplier, item, description or status…" value="' + esc(PT_SEARCH) + '" oninput="ptOnSearch(this.value)"/>' +
       '<select id="ptCat" onchange="ptOnCat(this.value)"><option value="">All units</option>' +
-      cats.map(function(c){ return '<option' + (c === PT_CAT ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
+      cats.map(function(c){ return '<option' + (c === PT_CAT ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select>' + ptNoaBar() + '</div>' +
       '<div class="mn-chips" id="ptSumChips"></div><div class="pt-meta" id="ptMeta"></div><div id="ptSumArea"></div></div>';
     ptRenderSummary();
   } else {
@@ -4219,10 +4237,11 @@ function ptSummaryRows(allStatus){
   var q = PT_SEARCH.trim().toLowerCase();
   return ptPOs().filter(function(p){
     if (PT_CAT && p.category !== PT_CAT) return false;
+    if (!ptNoaOk(p.po_number)) return false;
     if (!allStatus && PT_SUM_ST && p.status !== PT_SUM_ST) return false;
     if (!q) return true;
     var a = p.rec || {};
-    return [p.po_number, p.supplier, p.category, p.status, p.other, p.overall, a.category, a.remarks, a.lacking, a.folder, a.transmitted_to]
+    return [p.po_number, ptNoaOf(p.po_number), p.supplier, p.category, p.status, p.other, p.overall, a.category, a.remarks, a.lacking, a.folder, a.transmitted_to]
       .concat(p.lines.map(function(l){ return l.item_code + ' ' + l.description; })).join(' ').toLowerCase().indexOf(q) !== -1;
   }).sort(function(a, b){
     if (a.stamp !== b.stamp) return a.stamp < b.stamp ? 1 : -1;
@@ -4246,7 +4265,7 @@ function ptRenderSummary(){
   document.getElementById('ptMeta').textContent = 'Showing ' + shown.length + ' of ' + rows.length + ' PO(s)' + (rows.length !== all ? ' (filtered from ' + all + ')' : '') +
     (rows.length > MAX_ROWS ? ' — type in the search box to narrow it down' : '');
   if (!shown.length){ document.getElementById('ptSumArea').innerHTML = '<div class="pt-empty">No matching POs.</div>'; return; }
-  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th>PO No.</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
+  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th>PO No.</th><th>NOA #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
     '<th>Delivery Status</th><th>Lacking / Remarks</th><th>PO Status</th></tr></thead><tbody>';
   shown.forEach(function(p){
     var a = p.rec || {}, n = p.lines.length;
@@ -4256,6 +4275,7 @@ function ptRenderSummary(){
     var amt = a.gross != null ? a.gross : a.amount;
     var lr = [a.lacking ? '<span class="mn-lack">' + esc(lkShort(a.lacking)) + '</span>' : '', esc(String(a.remarks || '').slice(0, 90))].filter(Boolean).join('<br>');
     h += '<tr><td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
+      '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
       '<td><span class="pt-cat">' + esc(p.category || '') + '</span></td><td>' + esc(p.supplier || '') + '</td>' +
       '<td class="pt-wrap">' + items + '</td><td style="text-align:right;white-space:nowrap">' + (amt != null && amt !== '' ? M(amt, false) : '—') + '</td>' +
       '<td>' + (n ? ptDst(p.overall) : '—') + '</td><td class="pt-wrap" style="font-size:.74rem;max-width:260px">' + (lr || '—') + '</td>' +
@@ -4276,7 +4296,7 @@ function ptOpenPo(key){
       '<td>' + esc(l.qty_ordered) + '</td><td>' + esc(l.qty_delivered) + '</td><td>' + esc(l.balance) + '</td><td>' + ptDst(l.delivery_status) + '</td>' +
       '<td>' + ptBadge(l.trail_status, ' onclick="ptOpenLine(' + l.po_line_id + ')" title="Open this item\'s trail"') + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
   box.innerHTML = '<div class="pt-mhead"><b>' + esc(p.po_number) + '</b> — ' + esc(p.supplier || '') + ' <span class="pt-cat">' + esc(p.category || '') + '</span>' +
-      '<div class="pt-msub">' + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
+      '<div class="pt-msub">' + (ptNoaOf(p.po_number) ? 'NOA # ' + esc(ptNoaOf(p.po_number)) + ' · ' : '') + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
     '<div class="pt-mstatus">Current PO Status: ' + ptBadge(p.status || 'RACK') + (p.other && p.other !== p.status ? '<span class="pt-note">also ' + esc(p.other) + '</span>' : '') + '</div>' +
     (a ? '<div id="monEdPt"></div>' : '<p class="pt-note">No SOP record yet — the SOP status (For SOP, Pending, Processed …) starts once the PO is finalized FOR SOP or added in SOP Monitoring.</p>') +
     lines + '<div id="ptPoRem"></div>' + ptDocsOnFile(p.po_number) +
@@ -4670,8 +4690,9 @@ function apTabsFor(){
   return [];
 }
 // Master Lists: Approver and Encoder can add and edit; Admin can only add (not Locations)
-function apMCanEdit(){ return ME.role === 'Approver' || ME.role === 'Encoder';
-}
+function apMCanEdit(){ return ME.role === 'Approver' || ME.role === 'Encoder' || ME.role === 'Admin'; }
+// Delete: Approver and Admin only (the Encoder can add and edit, not delete)
+function apMCanDelete(){ return ME.role === 'Approver' || ME.role === 'Admin'; }
 // the units this user works on (null = all). The SUPPLIES UNIT Approver also has HARDWARE (sub-unit);
 // FLUIDS are part of DRUGS AND MEDS.
 function myUnits(){
@@ -4718,6 +4739,7 @@ function apTodoRender(){
       }).join('') + '</tbody></table></div>' : '<div class="ap-empty">' + (TODO_SHOW === 'OPEN' ? '🎉 Nothing to do.' : 'Nothing here.') + '</div>') + '</div>';
 }
 // ── Beginning balance: the Approver corrects a beginning batch or adds a missed one ──
+var BEG_IO = null, BEG_ZERO = '';
 var BEG_ROWS = [], BEG_Q = '', BEG_UNIT = '', BEG_EDIT = null, BEG_ADD = false, BEG_MAX = 200, BEG_MR = '';
 function apBegOpen(code){ BEG_Q = code || ''; BEG_EDIT = null; apSwitch('beg'); }
 async function apBegView(){
@@ -4756,6 +4778,7 @@ function apBegRender(){
   h += '<div class="ap-search"><input type="text" id="begQ" placeholder="Search code, description, location…" value="' + esc(BEG_Q) + '" oninput="BEG_Q=this.value;apBegRows()"/>' +
       (units.length > 1 ? '<select onchange="BEG_UNIT=this.value;apBegRender()"><option value="">' + (myUnits() ? 'All my units' : 'All units') + '</option>' + units.map(function(u){ return '<option' + (BEG_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>' : '') +
       '<select onchange="BEG_MR=this.value;apBegRows()"><option value="">Manual RIS + Doña Alejandra</option><option value="M"' + (BEG_MR === 'M' ? ' selected' : '') + '>✋ Manual RIS only</option><option value="D"' + (BEG_MR === 'D' ? ' selected' : '') + '>Doña Alejandra only</option></select>' +
+      '<select onchange="BEG_ZERO=this.value;apBegRows()"><option value="">All quantities</option><option value="ZERO"' + (BEG_ZERO === 'ZERO' ? ' selected' : '') + '>Zero on hand only</option><option value="STOCK"' + (BEG_ZERO === 'STOCK' ? ' selected' : '') + '>With stock only</option></select>' +
       '<button class="sx-btn blue sm" onclick="apBegView()">↻ Refresh</button></div>' +
     '<div id="begRows"></div></div>';
   body.innerHTML = h;
@@ -4766,6 +4789,7 @@ function apBegRows(){
   var q = BEG_Q.trim().toLowerCase(), can = apBegCan(), M = function(v){ return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
   var rows = BEG_ROWS.filter(function(r){ return (!BEG_UNIT || r.stock_unit === BEG_UNIT) &&
     (!BEG_MR || (BEG_MR === 'M') === !!r.manual_ris) &&
+    (!BEG_ZERO || (BEG_ZERO === 'ZERO') === !(Number(r.qty_on_hand) > 0)) &&
     (!q || [r.item_code, r.description, r.location, r.source_ref].join(' ').toLowerCase().indexOf(q) !== -1); });
   var shown = rows.slice(0, BEG_MAX), nMr = rows.filter(function(r){ return r.manual_ris; }).length;
   if (!rows.length){ el.innerHTML = '<div class="ap-empty">' + (BEG_ROWS.length ? 'No match.' : 'No beginning balance loaded yet for your unit.') + '</div>'; return; }
@@ -4777,13 +4801,18 @@ function apBegRows(){
         '<td class="r"><input type="text" id="begQty" value="' + esc(r.qty_in) + '" style="width:90px;text-align:right"/><div class="ap-ro">was ' + M(r.qty_in) + '</div></td>' +
         '<td colspan="2"><input type="text" id="begR" placeholder="Reason (required)" style="width:100%"/></td><td></td>' +
         '<td class="nw"><button class="sx-btn green sm" onclick="apBegSave(' + r.id + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_EDIT=null;apBegRows()">✕</button></td></tr>';
+      if (BEG_IO === r.id) return '<tr style="background:#eefbf3"><td class="nw"><span class="pt-cat">' + esc(r.stock_unit) + '</span></td><td class="nw"><b>' + esc(r.item_code) + '</b></td><td>' + esc(r.description || '') + '<div class="ap-ro">Beginning ' + M(r.qty_in) + ' · on hand ' + M(r.qty_on_hand) + '</div></td>' +
+        '<td colspan="2"><select id="begIOt"><option value="IN">➕ IN (add)</option><option value="OUT">➖ OUT (deduct)</option></select></td>' +
+        '<td class="r"><input type="number" min="0" step="any" id="begIOq" placeholder="qty" style="width:90px;text-align:right"/></td>' +
+        '<td colspan="2"><input type="text" id="begIOr" placeholder="Reason (required)" style="width:100%"/></td><td></td>' +
+        '<td class="nw"><button class="sx-btn green sm" onclick="apBegIO(' + r.id + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_IO=null;apBegRows()">✕</button></td></tr>';
       return '<tr><td class="nw"><span class="pt-cat">' + esc(r.stock_unit) + '</span></td><td class="nw"><b>' + esc(r.item_code) + '</b></td>' +
         '<td>' + esc(r.description || '') + '<div class="ap-ro">' + esc(r.uom || '') + (r.source_ref && r.source_ref !== 'BEG INVENTORY' ? ' · ' + esc(r.source_ref) : '') + '</div></td>' +
         '<td class="nw">' + esc(toMDY(r.expiry_date) || '—') + '</td><td class="nw">' + esc(r.location || '—') + '</td>' +
         '<td class="r nw"><b>' + M(r.qty_in) + '</b></td><td class="r nw">' + (Number(r.qty_adjusted) ? (Number(r.qty_adjusted) > 0 ? '+' : '') + M(r.qty_adjusted) : '') + '</td>' +
         '<td class="r nw">' + M(r.qty_on_hand) + '</td>' +
         '<td style="text-align:center"><input type="checkbox" style="width:auto;transform:scale(1.25)"' + (r.manual_ris ? ' checked' : '') + (can ? ' onchange="apBegManual(' + r.id + ',this)"' : ' disabled') + '/></td>' +
-        '<td class="nw">' + (can ? '<button class="sx-btn blue sm" onclick="BEG_EDIT=' + r.id + ';apBegRows()">✎ Adjust</button>' : '') + '</td></tr>';
+        '<td class="nw">' + (can ? '<button class="sx-btn green sm" onclick="BEG_IO=' + r.id + ';BEG_EDIT=null;apBegRows()">± In / Out</button> <button class="sx-btn blue sm" onclick="BEG_EDIT=' + r.id + ';BEG_IO=null;apBegRows()">✎ Adjust</button>' : '') + '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
 async function apBegManual(id, el){
@@ -4799,6 +4828,20 @@ async function apBegSave(id){
   if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error))); return; }
   apMsg('ok', r.data.changes ? '✅ Saved: ' + esc(r.data.what) + ' — on the Stock Card and in the Edit Log.' : 'No changes.');
   BEG_EDIT = null; await apBegView();
+}
+// ± In / Out: add to or deduct from a batch's beginning quantity (works on batches with 0 qty too)
+async function apBegIO(id){
+  var r = BEG_ROWS.filter(function(x){ return x.id === id; })[0]; if (!r) return;
+  var t = apVal('begIOt'), q = Number(apVal('begIOq')), reason = apVal('begIOr');
+  if (!(q > 0)){ apMsg('err', 'Enter a quantity greater than 0.'); return; }
+  if (!reason){ apMsg('err', 'A reason is required.'); return; }
+  var base = Number(r.qty_in) || 0, onHand = Number(r.qty_on_hand) || 0;
+  if (t === 'OUT' && q > onHand){ apMsg('err', 'OUT cannot be more than the ' + onHand + ' on hand in this batch.'); return; }
+  var newQty = t === 'IN' ? base + q : base - q;
+  var res = await sb.rpc('apv_beg_adjust', { p: { lot_id: id, qty: String(newQty), expiry_date: r.expiry_date || '', location: r.location || '', reason: (t === 'IN' ? 'IN +' : 'OUT -') + q + ' — ' + reason } });
+  if (res.error){ apMsg('err', '❌ ' + esc(errText(res.error))); return; }
+  apMsg('ok', '✅ ' + (t === 'IN' ? 'Added ' : 'Deducted ') + q + ' — on the Stock Card as BEG. BAL. ADJUSTMENT and in the Edit Log.');
+  BEG_IO = null; await apBegView();
 }
 async function apBegSaveAdd(){
   var r = await sb.rpc('apv_beg_adjust', { p: { lot_id: null, unit: apVal('begAU'), item_code: apVal('begAC').split(' — ')[0].trim(), qty: apVal('begAQ'),
@@ -4830,8 +4873,8 @@ async function apInit(){
   if (!tabs.length){ document.getElementById('apBody').innerHTML = '<div class="ap-empty">⛔ Only the Approver and Admin can use this page.</div>'; return; }
   AP_RO = ME.role !== 'Approver';
   document.querySelector('#apMain .topbar h1').textContent = ME.role === 'Encoder' ? '📚 Master Lists' : ME.role === 'Admin' ? '📚 Master Lists & Edit Log' : '✅ Approvals';
-  document.getElementById('apRoleNote').textContent = ME.role === 'Encoder' ? 'Encoder — add and edit suppliers, end users, item codes and locations; every change is logged'
-    : AP_RO ? 'Admin — Master Lists (add suppliers, end users, item codes) and the Edit Log. Approvals are done by the Approvers.' : 'Approver — direct edits; every change is logged';
+  document.getElementById('apRoleNote').textContent = ME.role === 'Encoder' ? 'Encoder — add and edit suppliers, end users, item codes and locations (delete is for the Approver / Admin); every change is logged'
+    : AP_RO ? 'Admin — Master Lists (add, edit and delete suppliers, end users, item codes, locations) and the Edit Log. Approvals are done by the Approvers.' : 'Approver — direct edits; every change is logged';
   var iar = document.getElementById('rcMoIar'); if (iar && iar.parentNode !== document.body) document.body.appendChild(iar);
   document.getElementById('apTabs').innerHTML = tabs.map(function(t){
     return '<button class="subtab-btn" id="apTab_' + t[0] + '" onclick="apSwitch(\'' + t[0] + '\')">' + t[1] + '</button>';
@@ -4993,7 +5036,8 @@ function apPoRender(){
       '<td><button class="ap-btn sm gray" onclick="AP_CUR.add.splice(' + i + ',1);apPoRender()">✕</button></td></tr>';
   });
   html += '</tbody></table></div><div class="ap-actions"><button class="ap-btn gray" onclick="AP_CUR.add.push({item_code:\'\',description:\'\',unit:\'\',end_user:\'' + esc(h.end_user || '') + '\',qty_ordered:\'\',unit_cost:\'\'});apPoRender()">+ Add item</button>' +
-    '<button class="ap-btn green" onclick="apPoSave()">💾 Save PO changes</button></div>';
+    '<button class="ap-btn green" onclick="apPoSave()">💾 Save PO changes</button>' +
+    (ME.role === 'Approver' ? (hasDel ? '<span class="ap-ro" style="margin-left:auto;align-self:center">🗑 Cannot delete — this PO already has deliveries</span>' : '<button class="ap-btn gray" style="margin-left:auto;color:#b42318" onclick="apPoDelete()">🗑 Delete PO</button>') : '') + '</div>';
   // keep typed header values across re-render
   var keep = {}; if (c._shown) ['apPoNo','apPoSup','apPoDate','apPoClass','apPoSrd','apPoTerms','apPoDue','apPoFund','apPoMode','apPoStage','apPoEu','apPoEun','apPoProj','apPoTxn','apPoLoc','apPoNoa','apPoTin','apPoObr','apPoObrD'].forEach(function(id){ var el = document.getElementById(id); if (el) keep[id] = el.value; });
   var lineKeep = {}; if (c._shown) document.querySelectorAll('#apEd input[id^="apPl"]').forEach(function(el){ lineKeep[el.id] = el.value; });
@@ -5003,6 +5047,18 @@ function apPoRender(){
   Object.keys(lineKeep).forEach(function(id){ var el = document.getElementById(id); if (el) el.value = lineKeep[id]; });
   apPoTxnHint();
   apLock();
+}
+async function apPoDelete(){
+  var c = AP_CUR; if (!c || ME.role !== 'Approver') return;
+  var po = c.h.po_number;
+  if (!confirm('Delete PO ' + po + ' and all its items?\n\nThis cannot be undone. Use this for duplicate / returned POs that have no deliveries.')) return;
+  var r = await sb.rpc('apv_delete_po', { p_po_number: po });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_delete_po/.test(errText(r.error)) && /not|exist|find/i.test(errText(r.error)) ? ' — has update 50 been run?' : '')); return; }
+  RC_PO_MAP = {}; AP_CUR = null;
+  var ed = document.getElementById('apEd'); if (ed) ed.innerHTML = '';
+  var k = document.getElementById('apKey'); if (k) k.value = '';
+  apFillList('apPoList', 'po_headers', 'po_number');
+  apMsg('ok', '🗑 PO ' + esc(po) + ' deleted.');
 }
 // what happens to the deliveries already received when the Type of Transaction changes
 function apPoTxnHint(){
@@ -5354,7 +5410,7 @@ function apMasterView(kind){
 function apMasterForm(){
   var d = AP_MDEF[AP_MKIND], row = AP_MEDIT;
   if (!apMCanEdit() && (row || AP_MKIND === 'location')){
-    document.getElementById('apMForm').innerHTML = '<p class="ap-hint" style="margin:0 0 10px">👁 View only — Admin can add new Suppliers, End Users and Item Codes. Editing is for the Approver.</p>';
+    document.getElementById('apMForm').innerHTML = '<p class="ap-hint" style="margin:0 0 10px">👁 View only.</p>';
     return;
   }
   var html = '<div class="ap-h">' + (row ? '✏️ Edit ' : '➕ Add ') + d.label.replace(/s$/, '') + (row ? ' — ' + esc(row[d.key]) : '') + '</div><div class="ap-grid">';
@@ -5375,12 +5431,22 @@ function apMasterList(){
   document.getElementById('apMList').innerHTML = '<div class="ap-h">' + d.label + ' <span class="ap-ro">(' + f.length + (f.length > 300 ? ' — showing 300, type to search' : '') + ')</span></div>' +
     '<div class="ap-scroll"><table class="ap-tbl"><thead><tr>' + d.cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '<th></th></tr></thead><tbody>' +
     shown.map(function(r){ return '<tr>' + d.cols.map(function(c){ return '<td>' + esc(r[c[0]] == null ? '' : r[c[0]]) + '</td>'; }).join('') +
-      '<td>' + (!apMCanEdit() ? '' : '<button class="ap-btn sm" onclick="apMasterEdit(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">Edit</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      '<td class="nw">' + (!apMCanEdit() ? '' : '<button class="ap-btn sm" onclick="apMasterEdit(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">Edit</button>') +
+      (!apMCanDelete() ? '' : ' <button class="ap-btn sm gray" style="color:#b42318" onclick="apMasterDelete(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">🗑 Delete</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
 }
 function apMasterEdit(key){
   var d = AP_MDEF[AP_MKIND];
   AP_MEDIT = (AP_LISTS[d.list] || []).filter(function(r){ return String(r[d.key]) === key; })[0] || null;
   apMasterForm(); window.scrollTo(0, 0);
+}
+async function apMasterDelete(key){
+  if (!apMCanDelete()) return;
+  var d = AP_MDEF[AP_MKIND], one = d.label.replace(/s$/, '');
+  if (!confirm('Delete ' + one + ' "' + key + '"?\n\nThis cannot be undone. If it is already used in POs, receipts or RIS, set its Status to Inactive instead.')) return;
+  var r = await sb.rpc('master_delete', { p_kind: AP_MKIND, p: { key: key } });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/master_delete/.test(errText(r.error)) && /not|exist|find/i.test(errText(r.error)) ? ' — has update 50 been run?' : '')); return; }
+  apMsg('ok', '🗑 Deleted ' + esc(key) + '.');
+  await apLoadLists(true); ENC_FORM = null; RC_ITEMS = []; RC_PO_MAP = {}; AP_MEDIT = null; apMasterForm(); apMasterList();
 }
 function apMasterSave(){
   var d = AP_MDEF[AP_MKIND], p = {};
