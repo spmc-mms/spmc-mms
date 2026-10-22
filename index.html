@@ -4683,7 +4683,7 @@ function apLock(){
 }
 
 function apTabsFor(){
-  var all = [['todo','📝 To Do'],['beg','📦 Beg. Balance'],['po','📋 PO'],['rcv','📥 Receive / IAR'],['ris','📤 Issuance (RIS)'],['rsmi','🧾 RSMI'],['xfer','🔁 Transfer of Item'],['master','📚 Master Lists'],['log','🕘 Edit Log']];
+  var all = [['todo','📝 To Do'],['beg','📦 Beg. Balance'],['po','📋 PO'],['rcv','📥 Receive / IAR'],['ris','📤 Issuance (RIS)'],['rsmi','🧾 RSMI'],['xfer','🔁 Transfer of Item'],['master','📚 Master Lists'],['delpo','🗑 Deleted POs'],['log','🕘 Edit Log']];
   if (ME.role === 'Approver') return all;
   if (ME.role === 'Admin') return [['master','📚 Master Lists'],['log','🕘 Edit Log']];   // approvals are for the Approvers only
   if (ME.role === 'Encoder') return [['master','📚 Master Lists']];
@@ -4906,6 +4906,7 @@ function apSwitch(t){
   if (t === 'master') apMasterView('supplier');
   if (t === 'todo')   apTodoView();
   if (t === 'beg')    apBegView();
+  if (t === 'delpo')  apDelPoView();
   if (t === 'log')    apLogView();
   if (t === 'po')   apFillList('apPoList', 'po_headers', 'po_number');
   if (t === 'rcv')  apFillList('apRcvList', 'receipts', 'receive_id');
@@ -5037,7 +5038,7 @@ function apPoRender(){
   });
   html += '</tbody></table></div><div class="ap-actions"><button class="ap-btn gray" onclick="AP_CUR.add.push({item_code:\'\',description:\'\',unit:\'\',end_user:\'' + esc(h.end_user || '') + '\',qty_ordered:\'\',unit_cost:\'\'});apPoRender()">+ Add item</button>' +
     '<button class="ap-btn green" onclick="apPoSave()">💾 Save PO changes</button>' +
-    (ME.role === 'Approver' ? (hasDel ? '<span class="ap-ro" style="margin-left:auto;align-self:center">🗑 Cannot delete — this PO already has deliveries</span>' : '<button class="ap-btn gray" style="margin-left:auto;color:#b42318" onclick="apPoDelete()">🗑 Delete PO</button>') : '') + '</div>';
+    (ME.role === 'Approver' ? '<button class="ap-btn gray" style="margin-left:auto;color:#b42318" onclick="apPoDelete()">🗑 Delete PO</button>' : '') + '</div>';
   // keep typed header values across re-render
   var keep = {}; if (c._shown) ['apPoNo','apPoSup','apPoDate','apPoClass','apPoSrd','apPoTerms','apPoDue','apPoFund','apPoMode','apPoStage','apPoEu','apPoEun','apPoProj','apPoTxn','apPoLoc','apPoNoa','apPoTin','apPoObr','apPoObrD'].forEach(function(id){ var el = document.getElementById(id); if (el) keep[id] = el.value; });
   var lineKeep = {}; if (c._shown) document.querySelectorAll('#apEd input[id^="apPl"]').forEach(function(el){ lineKeep[el.id] = el.value; });
@@ -5050,15 +5051,41 @@ function apPoRender(){
 }
 async function apPoDelete(){
   var c = AP_CUR; if (!c || ME.role !== 'Approver') return;
-  var po = c.h.po_number;
-  if (!confirm('Delete PO ' + po + ' and all its items?\n\nThis cannot be undone. Use this for duplicate / returned POs that have no deliveries.')) return;
+  var po = c.h.po_number, hasDel = c.lines.some(function(l){ return apNum(l.qty_delivered) > 0; });
+  if (!confirm('Delete PO ' + po + '?\n\nIt moves to the 🗑 Deleted POs tab' + (hasDel ? ', together with its deliveries (receipts / IAR, stock batches and stock card entries)' : '') + '. You can Restore it from there.')) return;
   var r = await sb.rpc('apv_delete_po', { p_po_number: po });
-  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_delete_po/.test(errText(r.error)) && /not|exist|find/i.test(errText(r.error)) ? ' — has update 50 been run?' : '')); return; }
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_delete_po/.test(errText(r.error)) && /not|exist|find/i.test(errText(r.error)) ? ' — has update 51 been run?' : '')); return; }
   RC_PO_MAP = {}; AP_CUR = null;
   var ed = document.getElementById('apEd'); if (ed) ed.innerHTML = '';
   var k = document.getElementById('apKey'); if (k) k.value = '';
   apFillList('apPoList', 'po_headers', 'po_number');
-  apMsg('ok', '🗑 PO ' + esc(po) + ' deleted.');
+  apMsg('ok', '🗑 PO ' + esc(po) + ' deleted — it is in the <b>🗑 Deleted POs</b> tab if you need to restore it.');
+}
+// ── Deleted POs: archive with Restore ──
+async function apDelPoView(){
+  var body = document.getElementById('apBody');
+  body.innerHTML = '<div class="ap-empty">Loading…</div>';
+  var r = await sb.rpc('apv_deleted_pos');
+  if (r.error){ body.innerHTML = '<div class="ap-empty">⚠ ' + esc(errText(r.error)) + ' — has update 51 been run?</div>'; return; }
+  var rows = r.data || [];
+  body.innerHTML = '<div class="ap-h">🗑 Deleted POs <span class="ap-ro">(' + rows.length + ')</span></div>' +
+    '<p class="ap-hint">POs you deleted, with their items, deliveries and stock. <b>Restore</b> puts a PO back exactly as it was (not possible if a PO with the same number exists now).</p>' +
+    (!rows.length ? '<div class="ap-empty">No deleted POs.</div>' :
+    '<div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>PO No.</th><th>Supplier</th><th>Unit</th><th>Items</th><th>Receipts</th><th>Deleted by</th><th>Deleted on</th><th>Status</th><th></th></tr></thead><tbody>' +
+    rows.map(function(x){
+      return '<tr><td class="nw"><b>' + esc(x.po_number) + '</b></td><td>' + esc(x.supplier || '') + '</td><td>' + esc(x.category || '') + '</td><td>' + esc(x.n_lines) + '</td><td>' + esc(x.n_receipts) + '</td>' +
+        '<td>' + esc(x.deleted_by || '') + '</td><td class="nw">' + esc(toMDYTime(x.deleted_at)) + '</td>' +
+        '<td>' + (x.restored_at ? '<span class="ap-tag ok">Restored ' + esc(toMDY(String(x.restored_at).slice(0, 10))) + '</span>' : '<span class="ap-tag warn">Deleted</span>') + '</td>' +
+        '<td class="nw">' + (x.restored_at ? '' : '<button class="ap-btn sm green" onclick="apDelPoRestore(' + x.id + ',\'' + esc(String(x.po_number).replace(/'/g, "\\'")) + '\')">↩ Restore</button>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>');
+}
+async function apDelPoRestore(id, po){
+  if (!confirm('Restore PO ' + po + ' with all its items, deliveries and stock?')) return;
+  var r = await sb.rpc('apv_restore_po', { p_id: id });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error))); return; }
+  RC_PO_MAP = {};
+  apMsg('ok', '↩ PO ' + esc(po) + ' restored.');
+  await apDelPoView();
 }
 // what happens to the deliveries already received when the Type of Transaction changes
 function apPoTxnHint(){
