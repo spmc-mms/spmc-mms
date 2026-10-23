@@ -533,6 +533,13 @@ tr.row-unclaimed{background:#fffaf0}
 .rp-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px}
 .rp-filters .ap-f{min-width:150px}
 .rp-title{font-size:1rem;font-weight:700;color:#1a3a5c}
+.rp-cols{margin:4px 0 12px;border:1px solid #e3e8ef;border-radius:10px;background:#fafcff}
+.rp-cols summary{cursor:pointer;padding:8px 12px;font-weight:700;color:#1a3a5c;font-size:.85rem}
+.rp-cols .rp-cbox{display:flex;flex-wrap:wrap;gap:6px 14px;padding:4px 12px 10px}
+.rp-cols label{display:flex;align-items:center;gap:5px;font-size:.8rem;cursor:pointer;white-space:nowrap}
+.rp-cols label input{width:auto;margin:0}
+.rp-cols .rp-cact{padding:0 12px 10px;display:flex;gap:8px}
+.rp-cols .rp-cact button{border:1px solid #cfd8e3;background:#fff;border-radius:7px;padding:3px 10px;font-size:.75rem;cursor:pointer}
 .rp-sub{font-size:.8rem;color:#777;margin:2px 0 12px}
 .rp-sec{font-size:.86rem;font-weight:700;color:#1a3a5c;margin:16px 0 6px}
 .rp-in{color:#1e8449;font-weight:700}.rp-out{color:#c0392b;font-weight:700}
@@ -995,6 +1002,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
   <div class="subtabs" id="rpTabs"></div>
   <div class="panel ap-panel">
     <div class="rp-filters" id="rpFilters"></div>
+    <div id="rpCols"></div>
     <div class="ap-msg" id="rpMsg"></div>
     <div id="rpOut"><div class="ap-empty">Pick a report, set the filters, then click ↻ Run report.</div></div>
   </div>
@@ -4929,23 +4937,23 @@ function apBegRows(){
         '<td><input type="date" id="begE" value="' + esc(r.expiry_date || '') + '"/></td><td><input type="text" id="begL" list="begLocs" value="' + esc(r.location || '') + '" style="width:120px"/></td>' +
         '<td class="r"><input type="text" id="begQty" value="' + esc(r.qty_in) + '" style="width:90px;text-align:right"/><div class="ap-ro">was ' + M(r.qty_in) + '</div></td>' +
         '<td colspan="2"><input type="text" id="begR" placeholder="Reason (required)" style="width:100%"/></td><td></td>' +
-        '<td class="nw"><button class="sx-btn green sm" onclick="apBegSave(' + r.id + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_EDIT=null;apBegRows()">✕</button></td></tr>';
+        '<td class="nw"><button class="sx-btn green sm" onclick="apBegSave(' + apBegId(r) + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_EDIT=null;apBegRows()">✕</button></td></tr>';
       if (BEG_IO === r.id) return '<tr style="background:#eefbf3"><td class="nw"><span class="pt-cat">' + esc(r.stock_unit) + '</span></td><td class="nw"><b>' + esc(r.item_code) + '</b></td><td>' + esc(r.description || '') + '<div class="ap-ro">Beginning ' + M(r.qty_in) + ' · on hand ' + M(r.qty_on_hand) + '</div></td>' +
-        '<td colspan="2"><select id="begIOt"><option value="IN">➕ IN (add)</option><option value="OUT">➖ OUT (deduct)</option></select></td>' +
+        '<td colspan="2"><select id="begIOt"><option value="IN">➕ IN (add)</option><option value="OUT"' + (r.virtual ? ' disabled' : '') + '>➖ OUT (deduct)</option></select></td>' +
         '<td class="r"><input type="number" min="0" step="any" id="begIOq" placeholder="qty" style="width:90px;text-align:right"/></td>' +
         '<td colspan="2"><input type="text" id="begIOr" placeholder="Reason (required)" style="width:100%"/></td><td></td>' +
-        '<td class="nw"><button class="sx-btn green sm" onclick="apBegIO(' + r.id + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_IO=null;apBegRows()">✕</button></td></tr>';
+        '<td class="nw"><button class="sx-btn green sm" onclick="apBegIO(' + apBegId(r) + ')">💾 Save</button> <button class="sx-btn gray sm" onclick="BEG_IO=null;apBegRows()">✕</button></td></tr>';
       if (r.virtual) return '<tr style="background:#f6f7f9;color:#667085"><td class="nw"><span class="pt-cat">' + esc(r.stock_unit) + '</span></td><td class="nw"><b>' + esc(r.item_code) + '</b></td>' +
         '<td>' + esc(r.description || '') + '<div class="ap-ro">' + esc(r.uom || '') + ' · no beginning balance (0)</div></td>' +
         '<td class="nw">—</td><td class="nw">—</td><td class="r nw"><b>0</b></td><td class="r nw"></td><td class="r nw">0</td><td></td>' +
-        '<td class="nw">' + (can ? '<button class="sx-btn green sm" onclick="apBegAddFor(\'' + esc(String(r.item_code).replace(/'/g, "\\'")) + '\',\'' + esc(r.stock_unit) + '\')">＋ Add batch</button>' : '') + '</td></tr>';
+        '<td class="nw">' + (can ? apBegBtns(r) : '') + '</td></tr>';
       return '<tr><td class="nw"><span class="pt-cat">' + esc(r.stock_unit) + '</span></td><td class="nw"><b>' + esc(r.item_code) + '</b></td>' +
         '<td>' + esc(r.description || '') + '<div class="ap-ro">' + esc(r.uom || '') + (r.source_ref && r.source_ref !== 'BEG INVENTORY' ? ' · ' + esc(r.source_ref) : '') + '</div></td>' +
         '<td class="nw">' + esc(toMDY(r.expiry_date) || '—') + '</td><td class="nw">' + esc(r.location || '—') + '</td>' +
         '<td class="r nw"><b>' + M(r.qty_in) + '</b></td><td class="r nw">' + (Number(r.qty_adjusted) ? (Number(r.qty_adjusted) > 0 ? '+' : '') + M(r.qty_adjusted) : '') + '</td>' +
         '<td class="r nw">' + M(r.qty_on_hand) + '</td>' +
         '<td style="text-align:center"><input type="checkbox" style="width:auto;transform:scale(1.25)"' + (r.manual_ris ? ' checked' : '') + (can ? ' onchange="apBegManual(' + r.id + ',this)"' : ' disabled') + '/></td>' +
-        '<td class="nw">' + (can ? '<button class="sx-btn green sm" onclick="BEG_IO=' + r.id + ';BEG_EDIT=null;apBegRows()">± In / Out</button> <button class="sx-btn blue sm" onclick="BEG_EDIT=' + r.id + ';BEG_IO=null;apBegRows()">✎ Adjust</button>' : '') + '</td></tr>';
+        '<td class="nw">' + (can ? apBegBtns(r) : '') + '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
 async function apBegManual(id, el){
@@ -4956,7 +4964,21 @@ async function apBegManual(id, el){
   var row = BEG_ROWS.filter(function(x){ return x.id === id; })[0]; if (row) row.manual_ris = el.checked;
   apMsg('ok', el.checked ? '✋ Marked <b>MANUAL RIS</b> — shows on the Realtime Stock page within 5 minutes.' : 'Back to <b>DOÑA ALEJANDRA</b>.');
 }
+// the same buttons on every row — a row with no batch yet (0 beginning) gets its first batch when saved
+function apBegId(r){ return typeof r.id === 'number' ? r.id : "'" + String(r.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; }
+function apBegBtns(r){ var k = String(apBegId(r)).replace(/"/g, '&quot;');
+  return '<button class="sx-btn green sm" onclick="BEG_IO=' + k + ';BEG_EDIT=null;apBegRows()">± In / Out</button> <button class="sx-btn blue sm" onclick="BEG_EDIT=' + k + ';BEG_IO=null;apBegRows()">✎ Adjust</button>'; }
+function apBegVRow_(id){ return typeof id === 'string' && id.indexOf('v:') === 0 ? apBegAll().filter(function(x){ return x.id === id; })[0] : null; }
+async function apBegAddV_(v, qty, exp, loc, reason){       // first beginning batch of an item that had none
+  if (!(Number(qty) > 0)){ apMsg('err', 'Enter a quantity greater than 0 — this item has no beginning batch yet.'); return; }
+  if (!reason){ apMsg('err', 'A reason is required.'); return; }
+  var r = await sb.rpc('apv_beg_adjust', { p: { lot_id: null, unit: v.stock_unit, item_code: v.item_code, qty: String(qty), expiry_date: exp || '', location: loc || '', reason: reason } });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error))); return; }
+  apMsg('ok', '✅ ' + esc(v.item_code) + ': beginning batch of ' + qty + ' added — on the Stock Card as BEG. BAL. ADJUSTMENT and in the Edit Log.');
+  BEG_EDIT = null; BEG_IO = null; await apBegView();
+}
 async function apBegSave(id){
+  var v = apBegVRow_(id); if (v) return apBegAddV_(v, apVal('begQty'), apVal('begE'), apVal('begL'), apVal('begR'));
   var r = await sb.rpc('apv_beg_adjust', { p: { lot_id: id, qty: apVal('begQty'), expiry_date: apVal('begE'), location: apVal('begL'), reason: apVal('begR') } });
   if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error))); return; }
   apMsg('ok', r.data.changes ? '✅ Saved: ' + esc(r.data.what) + ' — on the Stock Card and in the Edit Log.' : 'No changes.');
@@ -4964,6 +4986,9 @@ async function apBegSave(id){
 }
 // ± In / Out: add to or deduct from a batch's beginning quantity (works on batches with 0 qty too)
 async function apBegIO(id){
+  var v = apBegVRow_(id);
+  if (v){ if (apVal('begIOt') === 'OUT'){ apMsg('err', 'Nothing to deduct — this item has 0 beginning balance.'); return; }
+          return apBegAddV_(v, Number(apVal('begIOq')), '', '', apVal('begIOr') ? 'IN +' + apVal('begIOq') + ' — ' + apVal('begIOr') : ''); }
   var r = BEG_ROWS.filter(function(x){ return x.id === id; })[0]; if (!r) return;
   var t = apVal('begIOt'), q = Number(apVal('begIOq')), reason = apVal('begIOr');
   if (!(q > 0)){ apMsg('err', 'Enter a quantity greater than 0.'); return; }
@@ -5635,6 +5660,42 @@ async function apLogView(){
 //  REPORTS — everything printable and exportable to Excel.
 // ════════════════════════════════════════════════════════════════════════════
 var RP_TAB = 'summary', RP_CUR = null, RP_INIT = false;
+// ── Choose the columns of a report (remembered per report on this computer) ──
+var RP_PO_COLS = ['PO No.','NOA #','Unit','Type','Fund Cluster','Supplier','PO Date','Due Date','Items','Qty Ordered','Qty Delivered','Balance','Amount','Delivery Status','PO Trail','SOP Status','Lacking Documents (why PENDING)'];
+var RP_KNOWN = { po: RP_PO_COLS };          // columns of each report (filled after a run for the others)
+function rpHidden(t){ try { return JSON.parse(localStorage.getItem('rp_hide_' + (t || RP_TAB)) || '[]'); } catch(e){ return []; } }
+function rpSetHidden(list){ try { localStorage.setItem('rp_hide_' + RP_TAB, JSON.stringify(list)); } catch(e){} RP_HIDE_MEM[RP_TAB] = list; }
+var RP_HIDE_MEM = {};
+function rpHid(){ return RP_HIDE_MEM[RP_TAB] || rpHidden(); }
+function rpColsUI(){
+  var el = document.getElementById('rpCols'); if (!el) return;
+  var cols = RP_KNOWN[RP_TAB]; if (!cols || !cols.length){ el.innerHTML = ''; return; }
+  var hid = rpHid(), shown = cols.filter(function(c){ return hid.indexOf(c) === -1; }).length;
+  el.innerHTML = '<details class="rp-cols"' + (hid.length ? ' open' : '') + '><summary>☑ Columns to show — ' + shown + ' of ' + cols.length + ' (tick only what you need; Excel and Print follow)</summary>' +
+    '<div class="rp-cbox">' + cols.map(function(c, i){ return '<label><input type="checkbox" data-c="' + i + '"' + (hid.indexOf(c) === -1 ? ' checked' : '') + ' onchange="rpColTick(this)"/>' + esc(c) + '</label>'; }).join('') + '</div>' +
+    '<div class="rp-cact"><button type="button" onclick="rpColAll(true)">Tick all</button><button type="button" onclick="rpColAll(false)">Untick all</button></div></details>';
+}
+function rpColTick(el){
+  var cols = RP_KNOWN[RP_TAB] || [], c = cols[Number(el.getAttribute('data-c'))], hid = rpHid().filter(function(x){ return x !== c; });
+  if (!el.checked) hid.push(c);
+  if (hid.length >= cols.length){ el.checked = true; rpMsg('err', 'Keep at least one column.'); return; }
+  rpMsg(''); rpSetHidden(hid); rpColsUI(); if (RP_CUR) rpRender();
+}
+function rpColAll(on){
+  var cols = RP_KNOWN[RP_TAB] || [];
+  rpSetHidden(on ? [] : cols.slice(1));            // "untick all" keeps the first column
+  rpColsUI(); if (RP_CUR) rpRender();
+}
+// the report with only the ticked columns
+function rpView(){
+  var c = RP_CUR, hid = rpHid(); if (!c || !hid.length) return c;
+  return Object.assign({}, c, { sections: c.sections.map(function(s){
+    var keep = s.cols.map(function(h, i){ return hid.indexOf(h) === -1 ? i : -1; }).filter(function(i){ return i >= 0; });
+    if (!keep.length) return s;
+    return Object.assign({}, s, { cols: keep.map(function(i){ return s.cols[i]; }), rows: s.rows.map(function(r){ return keep.map(function(i){ return r[i]; }); }),
+      cls: s.cls ? keep.map(function(i){ return s.cls[i]; }) : null });
+  }) });
+}
 var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
 function rpMonthStart(){ var d = new Date(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function rpMsg(kind, t){ var b = document.getElementById('rpMsg'); b.className = 'ap-msg ' + (kind || ''); b.innerHTML = t || ''; }
@@ -5670,6 +5731,7 @@ function rpSwitch(t){
         apOpt(['RACK','FOR IAR','FOR INSPECTION','INSPECTED','ACCEPTED','TRANSMITTED','PARTIAL','CANCELLED','FOR SOP','PENDING','TRANSMITTED TO CAO','TRANSMITTED TO BAC','RETURNED BY ACCTG','RE-TRANSMITTED TO CAO','RE-TRANSMITTED TO PROCUREMENT','RE-TRANSMITTED TO ACCTG','PROCESSED','PROCESSED AS PARTIAL PAYMENT','PROCESSED AND FILED']) + '</select></div>' +
       apField('PO Date from', 'rpFrom', '', { type: 'date' }) + apField('PO Date to', 'rpTo', '', { type: 'date' });
   document.getElementById('rpFilters').innerHTML = f || '<span class="ap-ro">No filters — click ↻ Run report.</span>';
+  rpColsUI();
   document.getElementById('rpOut').innerHTML = '<div class="ap-empty">Set the filters, then click ↻ Run report.</div>';
   if (t === 'card') rpCardList();
   if (t === 'po') fetchAll(function(){ var q = sb.from('po_headers').select('fund_cluster'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('fund_cluster'); }).then(function(rows){
@@ -5696,7 +5758,9 @@ function rpCardList(){
 
 // RP_CUR = { title, sub, kv:[[label,value]], sections:[{ heading, cols:[label], rows:[[cell]], cls:[class per col] }] }
 function rpRender(){
-  var c = RP_CUR, html = '<div class="rp-title">' + esc(c.title) + '</div><div class="rp-sub">' + esc(c.sub || '') + '</div>';
+  if (RP_CUR && RP_CUR.sections && RP_CUR.sections[0] && RP_TAB !== 'po'){ var cs = RP_CUR.sections[0].cols, k = RP_KNOWN[RP_TAB];
+    if (!k || k.join('|') !== cs.join('|')){ RP_KNOWN[RP_TAB] = cs.slice(); rpColsUI(); } }
+  var c = rpView(), html = '<div class="rp-title">' + esc(c.title) + '</div><div class="rp-sub">' + esc(c.sub || '') + '</div>';
   if (c.kv && c.kv.length) html += '<div class="rp-kv">' + c.kv.map(function(k){ return '<div><b>' + esc(k[1]) + '</b>' + esc(k[0]) + '</div>'; }).join('') + '</div>';
   c.sections.forEach(function(s){
     if (s.heading) html += '<div class="rp-sec">' + esc(s.heading) + '</div>';
@@ -5822,7 +5886,7 @@ async function rpRun(){
     if (t === 'po'){
       var unit = ME.unit || apVal('rpUnit'), st = apVal('rpPoSt'), pf = apVal('rpFrom'), pt = apVal('rpTo'), fund = apVal('rpFund'), trailF = apVal('rpTrail');
       var res = await Promise.all([
-        fetchAll(function(){ return sb.from('v_po_lines').select('po_number,category,txn_type,fund_cluster,supplier,po_date,due_date,overall_status,trail_status,qty_ordered,qty_delivered,balance,total_amount').order('po_date', { ascending: false }).order('po_number'); }),
+        fetchAll(function(){ return sb.from('v_po_lines').select('po_number,category,txn_type,fund_cluster,supplier,po_date,due_date,overall_status,trail_status,qty_ordered,qty_delivered,balance,total_amount,noa_number').order('po_date', { ascending: false }).order('po_number'); }),
         fetchAll(function(){ return sb.from('v_po_trail').select('trail_id,po_number,status,doc_pending,lacking_docs').order('trail_id'); }),
         // SOP Monitoring records (For SOP, Pending, Transmitted … Processed and Filed) — incl. the old PO Monitoring app's
         fetchAll(function(){ return sb.from('v_sop_monitoring').select('id,source,unit,po_number,supplier,category,amount,gross,fund_cluster,date_received,sop_status,lacking,remarks,updated_at').order('id'); }).catch(function(){ return []; })
@@ -5867,24 +5931,24 @@ async function rpRun(){
         if (tr === 'RETURNED') tr = 'RETURNED BY ACCTG';
         if (Object.keys(g.trails).length === 1 && g.trails.RACK){ tr = g.b <= 0 ? (g.d > 0 ? 'FOR SOP' : 'CANCELLED') : (g.d > 0 ? 'PARTIAL' : 'RACK'); g.trails = {}; g.trails[tr] = true; }
         return { trails: g.trails, sop: r ? r.sop_status : '', lk: ll,
-          row: [k, l.category, l.txn_type || 'REGULAR STOCK', l.fund_cluster || '', l.supplier, l.po_date, l.due_date || '', g.n, g.o, g.d, g.b, g.amt.toFixed(2), l.overall_status, tr, r ? r.sop_status : '', ll.join('; ')] };
+          row: [k, l.noa_number || '', l.category, l.txn_type || 'REGULAR STOCK', l.fund_cluster || '', l.supplier, l.po_date, l.due_date || '', g.n, g.o, g.d, g.b, g.amt.toFixed(2), l.overall_status, tr, r ? r.sop_status : '', ll.join('; ')] };
       }).concat(only.map(function(r){ var ll = recLack(r);
         return { trails: {}, sop: r.sop_status, lk: ll,
-          row: [r.po_number, r.unit || '', '—', r.fund_cluster || '', r.supplier || '', '', '', '', '', '', '', r.gross != null ? Number(r.gross).toFixed(2) : (r.amount != null ? Number(r.amount).toFixed(2) : ''), '—', '—', r.sop_status, ll.join('; ') + (r.source === 'IMPORT' ? (ll.length ? ' · ' : '') + 'old app record' : '')] };
+          row: [r.po_number, '', r.unit || '', '—', r.fund_cluster || '', r.supplier || '', '', '', '', '', '', '', r.gross != null ? Number(r.gross).toFixed(2) : (r.amount != null ? Number(r.amount).toFixed(2) : ''), '—', '—', r.sop_status, ll.join('; ') + (r.source === 'IMPORT' ? (ll.length ? ' · ' : '') + 'old app record' : '')] };
       }));
       if (trailF) rows = rows.filter(function(x){
         if (trailF === 'LACKING') return x.lk.length > 0;
         if (sopSt.indexOf(trailF) !== -1) return x.sop === trailF || !!x.trails[trailF];
         return !!x.trails[trailF];
       });
-      var nLack = rows.filter(function(x){ return x.lk.length; }).length, nOnly = rows.filter(function(x){ return x.row[2] === '—'; }).length;
+      var nLack = rows.filter(function(x){ return x.lk.length; }).length, nOnly = rows.filter(function(x){ return x.row[3] === '—'; }).length;
       RP_CUR = { title: 'PO Delivery Status',
         sub: (unit || 'All units') + (fund ? ' · Fund ' + fund : '') + (st ? ' · ' + st : '') + (trailF ? ' · Status: ' + (trailF === 'LACKING' ? 'with lacking documents' : trailF) : '') +
              (pf || pt ? ' · PO date ' + (pf || '…') + ' to ' + (pt || '…') : '') + (st || pf || pt ? ' · POs only in SOP Monitoring are left out (no delivery / PO date)' : ''),
         kv: [['POs', rows.length], ['Only in SOP Monitoring (old app)', nOnly], ['With lacking documents', nLack]],
-        sections: [{ cols: ['PO No.','Unit','Type','Fund Cluster','Supplier','PO Date','Due Date','Items','Qty Ordered','Qty Delivered','Balance','Amount','Delivery Status','PO Trail','SOP Status','Lacking Documents (why PENDING)'],
+        sections: [{ cols: RP_PO_COLS.slice(),
           rows: rows.map(function(x){ return x.row; }),
-          cls: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, function(v){ return v === 'PENDING' || v === 'RETURNED BY ACCTG' ? 'rp-out' : ''; }, function(v){ return v ? 'rp-out' : ''; }] }] };
+          cls: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, function(v){ return v === 'PENDING' || v === 'RETURNED BY ACCTG' ? 'rp-out' : ''; }, function(v){ return v ? 'rp-out' : ''; }] }] };
     }
     rpRender();
   } catch(e){
@@ -5897,23 +5961,24 @@ function rpFileName(){ return (RP_CUR.title || 'MMS Report').replace(/[^\w\- ]+/
 function rpExcel(){
   if (!RP_CUR){ rpMsg('err', 'Run a report first.'); return; }
   if (!window.XLSX){ rpMsg('err', 'The Excel tool could not load — check the internet connection and refresh.'); return; }
-  var aoa = [[RP_CUR.title], [RP_CUR.sub || ''], []];
-  (RP_CUR.kv || []).forEach(function(k){ aoa.push([k[0], k[1]]); });
-  if ((RP_CUR.kv || []).length) aoa.push([]);
-  RP_CUR.sections.forEach(function(s){
+  var V = rpView();
+  var aoa = [[V.title], [V.sub || ''], []];
+  (V.kv || []).forEach(function(k){ aoa.push([k[0], k[1]]); });
+  if ((V.kv || []).length) aoa.push([]);
+  V.sections.forEach(function(s){
     if (s.heading) aoa.push([s.heading]);
     aoa.push(s.cols);
     s.rows.forEach(function(r){ aoa.push(r.map(function(v){ var n = Number(v); return (v !== '' && v != null && !isNaN(n) && /^[+\-]?\d+(\.\d+)?$/.test(String(v))) ? n : v; })); });
     aoa.push([]);
   });
   var ws = xlsMdy(XLSX.utils.aoa_to_sheet(aoa));
-  ws['!cols'] = (RP_CUR.sections[0] ? RP_CUR.sections[0].cols : []).map(function(c){ return { wch: Math.max(12, String(c).length + 4) }; });
+  ws['!cols'] = (V.sections[0] ? V.sections[0].cols : []).map(function(c){ return { wch: Math.max(12, String(c).length + 4) }; });
   var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Report');
   XLSX.writeFile(wb, rpFileName() + '.xlsx');
 }
 function rpPrint(){
   if (!RP_CUR){ rpMsg('err', 'Run a report first.'); return; }
-  var c = RP_CUR;
+  var c = rpView();
   var body = '<h2>' + esc(c.title) + '</h2><div class="sub">' + esc(c.sub || '') + ' · Printed ' + esc(toMDYTime(new Date())) + ' by ' + esc(ME.full_name) + '</div>';
   if ((c.kv || []).length) body += '<table class="kv"><tr>' + c.kv.map(function(k){ return '<td><b>' + esc(k[1]) + '</b><br>' + esc(k[0]) + '</td>'; }).join('') + '</tr></table>';
   c.sections.forEach(function(s){
