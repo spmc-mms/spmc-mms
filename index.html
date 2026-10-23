@@ -5729,6 +5729,8 @@ function rpSwitch(t){
       '<div class="ap-f"><label>Fund Cluster</label><select id="rpFund"><option value="">All funds</option></select></div>' +
       '<div class="ap-f"><label>PO Trail</label><select id="rpTrail"><option value="">All</option><option value="LACKING">With lacking documents (PENDING)</option>' +
         apOpt(['RACK','FOR IAR','FOR INSPECTION','INSPECTED','ACCEPTED','TRANSMITTED','PARTIAL','CANCELLED','FOR SOP','PENDING','TRANSMITTED TO CAO','TRANSMITTED TO BAC','RETURNED BY ACCTG','RE-TRANSMITTED TO CAO','RE-TRANSMITTED TO PROCUREMENT','RE-TRANSMITTED TO ACCTG','PROCESSED','PROCESSED AS PARTIAL PAYMENT','PROCESSED AND FILED']) + '</select></div>' +
+      '<div class="ap-f"><label>Supplier</label><input type="text" id="rpSup" list="rpSupDl" placeholder="All suppliers — type to pick" autocomplete="off"/>' +
+        '<datalist id="rpSupDl">' + ((AP_LISTS && AP_LISTS.sup) || []).map(function(x){ return '<option value="' + esc(x.supplier_name) + '"></option>'; }).join('') + '</datalist></div>' +
       apField('PO Date from', 'rpFrom', '', { type: 'date' }) + apField('PO Date to', 'rpTo', '', { type: 'date' });
   document.getElementById('rpFilters').innerHTML = f || '<span class="ap-ro">No filters — click ↻ Run report.</span>';
   rpColsUI();
@@ -5885,6 +5887,7 @@ async function rpRun(){
     }
     if (t === 'po'){
       var unit = ME.unit || apVal('rpUnit'), st = apVal('rpPoSt'), pf = apVal('rpFrom'), pt = apVal('rpTo'), fund = apVal('rpFund'), trailF = apVal('rpTrail');
+      var supF = apVal('rpSup').toUpperCase(), supOk = function(v){ return !supF || String(v || '').toUpperCase().indexOf(supF) !== -1; };
       var res = await Promise.all([
         fetchAll(function(){ return sb.from('v_po_lines').select('po_number,category,txn_type,fund_cluster,supplier,po_date,due_date,overall_status,trail_status,qty_ordered,qty_delivered,balance,total_amount,noa_number').order('po_date', { ascending: false }).order('po_number'); }),
         fetchAll(function(){ return sb.from('v_po_trail').select('trail_id,po_number,status,doc_pending,lacking_docs').order('trail_id'); }),
@@ -5909,6 +5912,7 @@ async function rpRun(){
       var by = {}, order = [];
       res[0].forEach(function(l){
         if (unit && l.category !== unit) return;
+        if (!supOk(l.supplier)) return;
         if (fund && fundKey(l.fund_cluster) !== fundKey(fund)) return;
         if (pf && l.po_date < pf) return; if (pt && l.po_date > pt) return;
         if (st === 'NOT COMPLETE' ? l.overall_status === 'COMPLETE' : (st && l.overall_status !== st)) return;
@@ -5922,6 +5926,7 @@ async function rpRun(){
       if (!st && !pf && !pt) Object.keys(rec).forEach(function(k){ var r = rec[k];
         if (inSys[k]) return;
         if (unit && r.unit !== unit) return;
+        if (!supOk(r.supplier)) return;
         if (fund && fundKey(r.fund_cluster) !== fundKey(fund)) return;
         only.push(r);
       });
@@ -5942,10 +5947,11 @@ async function rpRun(){
         return !!x.trails[trailF];
       });
       var nLack = rows.filter(function(x){ return x.lk.length; }).length, nOnly = rows.filter(function(x){ return x.row[3] === '—'; }).length;
+      var totVal = rows.reduce(function(a, x){ return a + (Number(x.row[12]) || 0); }, 0);
       RP_CUR = { title: 'PO Delivery Status',
-        sub: (unit || 'All units') + (fund ? ' · Fund ' + fund : '') + (st ? ' · ' + st : '') + (trailF ? ' · Status: ' + (trailF === 'LACKING' ? 'with lacking documents' : trailF) : '') +
+        sub: (unit || 'All units') + (supF ? ' · Supplier: ' + apVal('rpSup') : '') + (fund ? ' · Fund ' + fund : '') + (st ? ' · ' + st : '') + (trailF ? ' · Status: ' + (trailF === 'LACKING' ? 'with lacking documents' : trailF) : '') +
              (pf || pt ? ' · PO date ' + (pf || '…') + ' to ' + (pt || '…') : '') + (st || pf || pt ? ' · POs only in SOP Monitoring are left out (no delivery / PO date)' : ''),
-        kv: [['POs', rows.length], ['Only in SOP Monitoring (old app)', nOnly], ['With lacking documents', nLack]],
+        kv: [['Total POs', rows.length], ['Total Value', '₱' + sopMoney(totVal, false)], ['With lacking documents', nLack]].concat(nOnly ? [['Only in SOP Monitoring (old app)', nOnly]] : []),
         sections: [{ cols: RP_PO_COLS.slice(),
           rows: rows.map(function(x){ return x.row; }),
           cls: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, function(v){ return v === 'PENDING' || v === 'RETURNED BY ACCTG' ? 'rp-out' : ''; }, function(v){ return v ? 'rp-out' : ''; }] }] };
@@ -5979,16 +5985,21 @@ function rpExcel(){
 function rpPrint(){
   if (!RP_CUR){ rpMsg('err', 'Run a report first.'); return; }
   var c = rpView();
-  var body = '<h2>' + esc(c.title) + '</h2><div class="sub">' + esc(c.sub || '') + ' · Printed ' + esc(toMDYTime(new Date())) + ' by ' + esc(ME.full_name) + '</div>';
-  if ((c.kv || []).length) body += '<table class="kv"><tr>' + c.kv.map(function(k){ return '<td><b>' + esc(k[1]) + '</b><br>' + esc(k[0]) + '</td>'; }).join('') + '</tr></table>';
+  var isNum = function(v){ return v !== '' && v != null && /^[+\-]?[\d,]+(\.\d+)?$/.test(String(v)); };
+  var money = function(h){ return /amount|value|cost|gross|net/i.test(h); };
+  var body = '<h2>' + esc(c.title) + '</h2><div class="sub">' + esc(c.sub || '') + ' · Generated ' + esc(toMDYTime(new Date())) + ' by ' + esc(ME.full_name) + '</div>';
+  if ((c.kv || []).length) body += '<div class="kv">' + c.kv.map(function(k){ return '<div><span>' + esc(k[0]) + '</span><b>' + esc(k[1]) + '</b></div>'; }).join('') + '</div>';
   c.sections.forEach(function(s){
     if (s.heading) body += '<h3>' + esc(s.heading) + '</h3>';
-    body += s.rows.length ? '<table><thead><tr>' + s.cols.map(function(h){ return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
-      s.rows.map(function(r){ return '<tr>' + r.map(function(v){ return '<td>' + esc(v == null ? '' : v) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>' : '<p>No records.</p>';
+    body += s.rows.length ? '<table><thead><tr>' + s.cols.map(function(h, i){ return '<th' + (s.rows.some(function(r){ return isNum(r[i]); }) && money(h) ? ' class="r"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      s.rows.map(function(r){ return '<tr>' + r.map(function(v, i){ var m = money(s.cols[i]) && isNum(v);
+        return '<td' + (isNum(v) && !/fund|no\.|code/i.test(s.cols[i]) ? ' class="r"' : '') + '>' + (v == null || v === '' ? '—' : m ? '₱' + sopMoney(Number(String(v).replace(/,/g, '')), false) : esc(v)) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>' : '<p>No records.</p>';
   });
-  var css = '@page{size:A4 landscape;margin:12mm}body{font-family:Arial,sans-serif;font-size:10px;color:#111}h2{margin:0 0 2px;font-size:15px}h3{font-size:12px;margin:12px 0 4px}' +
-    '.sub{color:#555;margin-bottom:10px}table{width:100%;border-collapse:collapse;margin-bottom:8px}th,td{border:1px solid #999;padding:3px 5px;text-align:left}th{background:#eee}' +
-    'thead{display:table-header-group}tr{page-break-inside:avoid}.kv td{border:1px solid #ccc;text-align:center;font-size:10px}.kv b{font-size:13px}';
+  var css = '@page{size:A4 landscape;margin:12mm}body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#1b2333}h2{margin:0 0 3px;font-size:17px}h3{font-size:12px;margin:14px 0 5px}' +
+    '.sub{color:#5b6576;margin-bottom:12px;font-size:10.5px}.kv{display:flex;gap:34px;margin:0 0 12px}.kv span{display:block;color:#5b6576;font-size:10.5px}.kv b{font-size:15px}' +
+    'table{width:100%;border-collapse:collapse;margin-bottom:8px}th,td{border:1px solid #d5d9e2;padding:5px 7px;text-align:left;vertical-align:top;font-size:10px}' +
+    'th{background:#efedf8;font-size:8.5px;text-transform:uppercase;letter-spacing:.3px;color:#3a3f4b}td.r,th.r{text-align:right;white-space:nowrap}td:first-child{white-space:nowrap;font-weight:700}' +
+    'thead{display:table-header-group}tr{page-break-inside:avoid}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}';
   var fr = document.getElementById('rpPrintFrame');
   if (!fr){ fr = document.createElement('iframe'); fr.id = 'rpPrintFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(fr); }
   var doc = fr.contentWindow.document;
