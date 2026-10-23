@@ -2445,8 +2445,8 @@ async function rcInit(){
     RC_CAT = catSel.value;
     rcCombo('rcPo', function(){
       if (!RC_CAT) return [];
-      return Object.keys(RC_PO_MAP).sort().filter(function(k){ return RC_PO_MAP[k].category === RC_CAT; })
-        .map(function(k){ return k + ' — ' + RC_PO_MAP[k].supplier + ' [' + (RC_PO_MAP[k].category || '') + ']'; }); },
+      return Object.keys(RC_PO_MAP).sort().filter(function(k){ return (RC_PO_MAP[k].units || {})[RC_CAT] || RC_PO_MAP[k].category === RC_CAT; })
+        .map(function(k){ var m = Object.keys(RC_PO_MAP[k].units || {}).length > 1; return k + ' — ' + RC_PO_MAP[k].supplier + ' [' + (RC_PO_MAP[k].category || '') + (m ? ' · MIXED' : '') + ']'; }); },
       function(txt){ if (txt) rcSelectPo(txt.split(' — ')[0].trim()); });
     rcCombo('rcSup', function(){ return RC_SUPPLIERS; }, null);
     rcCombo('rcLoc', function(){ return RC_LOCS.map(function(l){ return l.display; }); }, null);
@@ -2538,15 +2538,26 @@ async function rcLoadFormData(){
   rcLoadDrafts();
   setLoading(true);
   try {
-    var lines = await fetchAll(function(){
-      var q = sb.from('v_po_lines').select('*').neq('overall_status','COMPLETE');
-      if (ME.unit) q = q.eq('category', ME.unit);
-      return q.order('po_number').order('po_line_id');
-    });
+    var lines;
+    try {
+      lines = await fetchAll(function(){
+        var q = sb.from('v_po_lines').select('*').neq('overall_status','COMPLETE');
+        if (ME.unit) q = q.eq('line_unit', ME.unit);           // mixed PO: the unit's own items
+        return q.order('po_number').order('po_line_id');
+      });
+    } catch(e1){                                               // before update 55
+      lines = await fetchAll(function(){
+        var q = sb.from('v_po_lines').select('*').neq('overall_status','COMPLETE');
+        if (ME.unit) q = q.eq('category', ME.unit);
+        return q.order('po_number').order('po_line_id');
+      });
+    }
     RC_PO_MAP = {};
     lines.forEach(function(l){
-      if (!RC_PO_MAP[l.po_number]) RC_PO_MAP[l.po_number] = { supplier: l.supplier, poDate: l.po_date, dueDate: l.due_date, fund: l.fund_cluster, category: l.category, txnType: l.txn_type || 'REGULAR STOCK', lines: [] };
+      l.line_unit = l.line_unit || l.category;
+      if (!RC_PO_MAP[l.po_number]) RC_PO_MAP[l.po_number] = { supplier: l.supplier, poDate: l.po_date, dueDate: l.due_date, fund: l.fund_cluster, category: l.category, txnType: l.txn_type || 'REGULAR STOCK', lines: [], units: {} };
       RC_PO_MAP[l.po_number].lines.push(l);
+      RC_PO_MAP[l.po_number].units[l.line_unit] = true;
     });
     var sups = await fetchAll(function(){ return sb.from('suppliers').select('supplier_name').eq('status','Active').order('supplier_name'); });
     RC_SUPPLIERS = sups.map(function(s){ return s.supplier_name; });
@@ -2611,16 +2622,24 @@ function rcTypeChange(){
   rcRenderRows();
 }
 
+// the PO's Project Name (printed on the IAR above the items) — fetched once per PO
+var RC_PO_PROJ = {};
+function rcLoadProj_(poNo){
+  if (!poNo || RC_PO_PROJ[poNo] !== undefined) return;
+  RC_PO_PROJ[poNo] = '';
+  sb.from('po_headers').select('project_name,noa_number').eq('po_number', poNo).maybeSingle().then(function(r){ if (r && r.data) RC_PO_PROJ[poNo] = r.data.project_name || ''; }, function(){});
+}
 function rcSelectPo(poNo){
+  rcLoadProj_(poNo);
   var po = RC_PO_MAP[poNo];
   RC_PO = po ? poNo : null;
   RC_ROWS = [];
   if (!po){ rcRenderRows(); return; }
-  if (po.category && po.category !== RC_CAT){ RC_CAT = po.category; document.getElementById('rcCat').value = RC_CAT; rcBuildFreeList(); }
+  if (!(po.units || {})[RC_CAT] && po.category && po.category !== RC_CAT){ RC_CAT = po.category; document.getElementById('rcCat').value = RC_CAT; rcBuildFreeList(); }
   document.getElementById('rcSup_in').value = po.supplier || '';
   document.getElementById('rcPoDate').value = po.poDate || '';
   document.getElementById('rcFund').value = po.fund || '';
-  var open = po.lines.filter(function(l){ return rcNum(l.balance) > 0; });
+  var open = po.lines.filter(function(l){ return rcNum(l.balance) > 0 && (l.line_unit || po.category) === RC_CAT; });   // mixed PO: this unit's items only
   open.forEach(function(l){
     RC_ROWS.push({ key: ++RC_ROW_SEQ, locked: true, first: true, poLineId: l.po_line_id, itemCode: l.item_code,
       desc: l.description, unit: l.unit, ordered: rcNum(l.qty_ordered), balance: rcNum(l.balance), endUser: l.end_user,
@@ -2629,10 +2648,11 @@ function rcSelectPo(poNo){
   });
   var pill = document.getElementById('rcPill');
   RC_INOUT = isInOut(po.txnType);
-  RC_CATERING = po.category === 'CATERING' || RC_INOUT;
-  pill.textContent = '📦 PO ' + poNo + ' [' + (po.category || '') + ' · ' + (po.txnType || 'REGULAR STOCK') + '] — ' + open.length + ' item line(s) with open balance' +
+  RC_CATERING = RC_CAT === 'CATERING' || RC_INOUT;
+  var mixed = Object.keys(po.units || {}).length > 1;
+  pill.textContent = '📦 PO ' + poNo + ' [' + (po.category || '') + (mixed ? ' · MIXED — ' + RC_CAT + ' items only, own IAR' : '') + ' · ' + (po.txnType || 'REGULAR STOCK') + '] — ' + open.length + ' item line(s) with open balance' +
     (RC_INOUT ? '  ·  🔄 IN & OUT: not stocked — on Save the items are issued at once to each line\'s end user. No Location / Expiry needed.'
-     : po.category === 'CATERING' ? '  ·  🍽 CATERING: received only, not added to stock — no Location / Expiry needed.' : '');
+     : RC_CAT === 'CATERING' ? '  ·  🍽 CATERING: received only, not added to stock — no Location / Expiry needed.' : '');
   pill.classList.add('show');
   rcRenderRows();
 }
@@ -2887,6 +2907,7 @@ function rcFormIarData(){
   });
   return { preview: true, fund: document.getElementById('rcFund').value, poNo: RC_PO, supplier: document.getElementById('rcSup_in').value, pod: document.getElementById('rcPoDate').value,
     invNo: document.getElementById('rcInvNo').value, invDate: document.getElementById('rcInvDate').value,
+    project: RC_PO_PROJ[RC_PO] || '',
     resp: document.getElementById('rcResp').value || (RC_CAT === 'CATERING' && allLines[0] && allLines[0].noa_number ? 'PR# ' + allLines[0].noa_number : ''),
     dateRec: document.getElementById('rcDate').value, loc: rcLocFromDisplay(document.getElementById('rcLoc_in').value),
     items: groupIarItems(items), poComplete: complete };
@@ -2923,8 +2944,9 @@ async function rcIarFromLog(receiveId){
     if (!rows.length){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Receipt ' + esc(receiveId) + ' was not found.</div>'; return; }
     var r0 = rows[0];
     var iar = await fetchAll(function(){ return sb.from('v_iar_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id').order('part_id'); });
-    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number').eq('po_number', r0.po_number).maybeSingle();
+    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name').eq('po_number', r0.po_number).maybeSingle();
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
+      project: po.data ? po.data.project_name || '' : '',
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
       dateRec: r0.date, loc: r0.location, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
       items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
@@ -3237,6 +3259,9 @@ function renderIarTemplate(o){
 var items = o.items, poComplete = o.poComplete;
 
 var lastLot = null, nLotRows = 0;
+// the PO's Project Name (CATERING, EQUIPMENT, HARDWARE …) — bold, above the items
+var projRow = o.project ? '<tr class="lot"><td></td><td style="white-space:pre-wrap">'+esc(o.project)+'</td><td></td><td></td></tr>' : '';
+if (o.project) nLotRows++;
 var rowsHtml = items.map(function(it){
 var head = '';
 if (it.lot && it.lot !== lastLot){ head = '<tr class="lot"><td></td><td>'+esc(it.lot)+'</td><td></td><td></td></tr>'; nLotRows++; }
@@ -3245,6 +3270,7 @@ lastLot = it.lot || null;
 return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+(it.lot && offCode(it.code) ? '' : esc(it.desc))+'</td><td class="c">'+esc(it.unit)+'</td>'+
 '<td class="c">'+it.qty+'</td></tr>';
 }).join('') + '<tr><td></td><td class="c" style="font-weight:bold">***NOTHING FOLLOWS***</td><td></td><td></td></tr>';
+rowsHtml = projRow + rowsHtml;
 // Pad the table out with blank ruled rows — same as the official form's
 // printed table, which is a fixed grid of blank rows rather than a table
 // that shrinks to fit however many items were received.
@@ -3565,7 +3591,9 @@ function poRenderCart(){
   }
   var sum = PO_CART.reduce(function(a, x){ return a + (x.qty || 0) * (x.unit_cost || 0); }, 0);
   var codedCart = poUsesCodeBox(PO_CART[0].cat), eqCart = PO_CART[0].cat === 'EQUIPMENT' || PO_CART[0].cat === 'HARDWARE';
-  area.innerHTML = '<table class="cart-table"><thead><tr><th>' + (codedCart ? 'Assigned Code' : 'Item Code') + '</th><th>' + (codedCart ? 'PO Description' : 'Description') + '</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Total</th><th></th></tr></thead><tbody>' +
+  var poCat = PO_CART[0].cat || document.getElementById('poCategory').value;
+  area.innerHTML = '<table class="cart-table"><thead><tr><th>' + (codedCart ? 'Assigned Code' : 'Item Code') + '</th><th>' + (codedCart ? 'PO Description' : 'Description') + '</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Total</th>' +
+    '<th title="Mixed PO: which unit receives this item (its own IAR and stock card)">Received by</th><th></th></tr></thead><tbody>' +
     PO_CART.map(function(r, i){
       var gh = r.group && (i === 0 || PO_CART[i - 1].group !== r.group) ? '<tr><td></td><td colspan="6" style="font-weight:700;color:#1a3a5c;background:#f3f7fc">📅 ' + esc(r.group) + '</td></tr>' : '';
       var codeCell = r.item_code ? '<span title="' + esc(r.assignedDesc || '') + '" style="cursor:help;border-bottom:1px dotted #888">' + esc(r.item_code) + '</span>'
@@ -3574,6 +3602,8 @@ function poRenderCart(){
         '<td><input class="cart-in' + (r.qty > 0 ? '' : ' cart-miss') + '" type="number" min="0" step="any" value="' + (r.qty > 0 ? r.qty : '') + '" placeholder="qty" oninput="poCartSet(' + i + ',\'qty\',this)"/></td>' +
         '<td><input class="cart-in' + (r.unit_cost >= 0 && r.unit_cost !== null && !isNaN(r.unit_cost) ? '' : ' cart-miss') + '" type="number" min="0" step="0.01" value="' + (isNaN(r.unit_cost) || r.unit_cost === null ? '' : r.unit_cost) + '" placeholder="0.00" oninput="poCartSet(' + i + ',\'unit_cost\',this)"/></td>' +
         '<td id="poCartT' + i + '">₱' + ((r.qty || 0) * (r.unit_cost || 0)).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td>' +
+        '<td><select class="cart-in" style="width:auto' + (r.stock_unit && r.stock_unit !== poCat ? ';background:#fff4e0;font-weight:700' : '') + '" onchange="PO_CART[' + i + '].stock_unit=this.value;poRenderCart()">' +
+          PO_CATEGORIES.map(function(c){ return '<option' + ((r.stock_unit || poCat) === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></td>' +
         '<td><button class="btn-remove" onclick="poRemove(' + i + ')">✕</button></td></tr>';
     }).join('') + '</tbody></table>';
   document.getElementById('poTotalAmt').textContent = '₱' + sum.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -3715,7 +3745,17 @@ async function poSubmit(){
   }});
   btn.disabled = false; btn.textContent = '✅ Submit PO';
   if (res.error){ poMsg(errText(res.error), 'err'); return; }
-  poMsg('PO ' + res.data.po_number + ' (' + res.data.category + ' · ' + (res.data.txn_type || 'REGULAR STOCK') + ') saved — ' + res.data.items + ' item(s).' + (res.data.due_date ? ' Due date: ' + toMDY(res.data.due_date) + '.' : ''), 'ok');
+  // MIXED PO: the items received by another unit
+  var mixNote = '';
+  if (PO_CART.some(function(r){ return r.stock_unit && r.stock_unit !== cat; })){
+    try {
+      var ids = await fetchAll(function(){ return sb.from('po_lines').select('id').eq('po_number', res.data.po_number).order('id'); });
+      var lu = PO_CART.map(function(r, i){ return ids[i] ? { id: ids[i].id, unit: r.stock_unit || cat } : null; }).filter(Boolean);
+      var mr = await sb.rpc('set_po_line_units', { p_po: res.data.po_number, p_lines: lu });
+      mixNote = mr.error ? ' ⚠ Received-by units not saved: ' + errText(mr.error) + ' — set them in Approvals → PO.' : ' Mixed PO: ' + mr.data.changed + ' item(s) are received by another unit.';
+    } catch(eM){ mixNote = ' ⚠ Received-by units not saved — set them in Approvals → PO.'; }
+  }
+  poMsg('PO ' + res.data.po_number + ' (' + res.data.category + ' · ' + (res.data.txn_type || 'REGULAR STOCK') + ') saved — ' + res.data.items + ' item(s).' + (res.data.due_date ? ' Due date: ' + toMDY(res.data.due_date) + '.' : '') + mixNote, mixNote.indexOf('⚠') !== -1 ? 'err' : 'ok');
   document.getElementById('poTxn').value = 'REGULAR STOCK'; poTxnChange();
   PO_CART = []; poRenderCart();
   ['poNumber','poNoa','poTin','poObrNo','poObrDate','poSup_in','poEU_in','poEuName','poProj','poGrp','poFund','poMode','poSrd','poTerms','poClass'].forEach(function(id){ document.getElementById(id).value = ''; });
@@ -5186,7 +5226,7 @@ async function apPoOpen(key){
     var h = await sb.from('po_headers').select('*').eq('po_number', po).maybeSingle();
     if (h.error) throw h.error;
     if (!h.data){ apMsg('err', 'PO "' + esc(po) + '" was not found.'); return; }
-    var lines = await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,item_code,description,unit,end_user,qty_ordered,qty_delivered,qty_cancelled,unit_cost,balance,delivery_status,po_description,po_unit,is_coded').eq('po_number', po).order('po_line_id'); });
+    var lines = await fetchAll(function(){ return sb.from('v_po_lines').select('*').eq('po_number', po).order('po_line_id'); });
     if (PO_GROUPS_ON) await poLineGroups_(po, lines, 'po_line_id');
     var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,po_line_id,date,iar_no').eq('po_number', po).order('date').order('receive_id'); });
     var rcvByLine = {}; rl.forEach(function(x){ if (!x.po_line_id) return; var a = rcvByLine[x.po_line_id] = rcvByLine[x.po_line_id] || [];
@@ -5195,6 +5235,15 @@ async function apPoOpen(key){
     if (!PO_OPTS.MODE.length) await poLoadOpts();
     apPoRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
+}
+// mixed PO: which unit receives this item (its own IAR and stock card) — saved at once
+async function apPoLineUnit(id, el){
+  var po = AP_CUR.h.po_number;
+  var r = await sb.rpc('set_po_line_units', { p_po: po, p_lines: [{ id: id, unit: el.value }] });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/set_po_line_units/.test(errText(r.error)) ? ' — has update 55 been run?' : '')); await apPoOpen(po); return; }
+  RC_PO_MAP = {};
+  await apPoOpen(po);
+  apMsg('ok', '✅ Saved — that item is received by <b>' + esc(el.value) + '</b> (its own receipt / IAR and stock card).');
 }
 function apPoFreeOk_(h, l){
   return apNum(l.qty_delivered) > 0 && h.category !== 'CATERING' && !isInOut(h.txn_type) && !apNoCode_(l) &&
@@ -5248,7 +5297,9 @@ function apPoRender(){
     html += '<tr class="' + (del ? 'del' : '') + '"><td>' + (PO_GROUPS_ON && poProjUnit(h.category) ? '<input type="text" id="apPlG' + l.po_line_id + '" value="' + esc(l.group || '') + '" placeholder="📅 heading (optional)" style="font-size:.75rem;margin-bottom:3px"/>' : '') +
       '<input type="text" id="apPlD' + l.po_line_id + '" value="' + esc(l.po_description || '') + '"/></td><td>' + codeCell + '</td>' +
       '<td><input type="text" id="apPlN' + l.po_line_id + '" value="' + esc(l.po_unit || l.unit || '') + '" style="width:70px"/></td>' +
-      '<td><input type="text" list="apEuDl" id="apPlEu' + l.po_line_id + '" value="' + esc(l.end_user || '') + '"/></td>' +
+      '<td><input type="text" list="apEuDl" id="apPlEu' + l.po_line_id + '" value="' + esc(l.end_user || '') + '"/>' +
+        '<div class="ap-ro" style="font-size:.7rem;margin-top:3px">received by <select style="font-size:.72rem;padding:1px 4px;width:auto" onchange="apPoLineUnit(' + l.po_line_id + ',this)"' + (apNum(l.qty_delivered) > 0 ? ' disabled title="Has deliveries"' : '') + '>' +
+          PO_CATEGORIES.map(function(c){ return '<option' + ((l.line_unit || h.category) === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div></td>' +
       '<td><input type="number" min="0" id="apPlQ' + l.po_line_id + '" value="' + l.qty_ordered + '"/></td><td>' + l.qty_delivered + '</td>' +
       '<td><input type="number" min="0" id="apPlC' + l.po_line_id + '" value="' + l.qty_cancelled + '"/></td>' +
       '<td><input type="number" min="0" step="0.01" id="apPlU' + l.po_line_id + '" value="' + l.unit_cost + '"/></td><td>' + l.balance + '</td><td>' + esc(l.delivery_status) + '</td>' +
