@@ -293,6 +293,9 @@ tr.row-unclaimed{background:#fffaf0}
 #receiveMain .iar-tbl th,#receiveMain .iar-tbl td{border:1px solid #000;padding:2px 4px;overflow:hidden}
 #receiveMain .iar-tbl th{text-align:center;background:#f0f0f0;font-size:8pt}
 #receiveMain .iar-tbl td{height:17px}
+#receiveMain .iar-tbl tbody td{border-top:none;border-bottom:none}
+#receiveMain .iar-tbl tbody tr:last-child td{border-bottom:1px solid #000}
+#receiveMain .iar-tbl .lot td{font-weight:bold}
 #receiveMain .iar-tbl .c{text-align:center}
 #receiveMain .iar-bot{display:flex;border:1.3px solid #000;border-top:none;min-height:130px}
 #receiveMain .iar-insp{flex:1;border-right:1.3px solid #000;padding:5px 8px;display:flex;flex-direction:column}
@@ -837,6 +840,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <button class="subtab-btn active" id="subtabReq" onclick="switchLogTab('req')">📥 Request Transactions</button>
       <button class="subtab-btn" id="subtabIss" onclick="switchLogTab('iss')">📤 Issuance Transactions (for RSMI)</button>
       <button class="subtab-btn" id="subtabRsmi" onclick="switchLogTab('rsmi')">🧾 RSMI</button>
+      <button class="subtab-btn" id="subtabPar" onclick="switchLogTab('par')">📄 PAR</button>
       <button class="subtab-btn" style="margin-left:auto" onclick="refreshLogView()">🔄 Refresh</button>
     </div>
 
@@ -883,6 +887,19 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
          can be viewed elsewhere in this app. Selecting RIS and creating
          a new RSMI now happens on the Issuance Transactions tab, above —
          see rsmiSelectbar there. -->
+    <div id="logPar" style="display:none">
+      <div class="log-filters">
+        <input type="text" id="fltPar" placeholder="Search PAR No, end user, item…" oninput="renderParLog()" style="min-width:260px"/>
+      </div>
+      <div style="font-size:.78rem;color:#888;margin-bottom:8px">EQUIPMENT issued with a PAR (Property Acknowledgment Receipt) — out of the stock card at once, not on the RSPI. New: ➕ New Request → Unit EQUIPMENT → PAR.</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>PAR No</th><th>End User</th><th>Item</th><th>Qty</th><th>Location</th><th>In-Charge</th><th>Source</th><th>Issued by</th></tr></thead>
+          <tbody id="tbParLog"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div id="logRsmi" style="display:none">
       <div style="font-size:.82rem;color:#888;margin-bottom:12px">To create a new RSMI, go to <b>Issuance Transactions</b> and tick the RSMI checkbox next to the RIS you want to include, then click <b>Create RSMI</b>.</div>
       <div class="tbl-wrap">
@@ -923,7 +940,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
         <div class="po-field"><label>Fund <span class="req">*</span></label><select id="poFund"><option value="">-- Select Fund --</option></select></div>
         <div class="po-field"><label>Mode of Procurement</label><select id="poMode" onchange="poOptPicked(this,'MODE')"><option value="">-- Select Mode --</option></select></div>
         <div class="po-field"><label>PO Sign (Auto)</label><div class="sign-box" id="poSign">—</div></div>
-        <div class="po-field"><label>NOA Number</label><input type="text" id="poNoa" placeholder="e.g. NOA-2026-001"/></div>
+        <div class="po-field"><label id="poNoaLbl">NOA Number</label><input type="text" id="poNoa" placeholder="e.g. NOA-2026-001"/></div>
       </div>
     </div>
 
@@ -1237,7 +1254,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       </div>
       <div style="max-height:46vh;overflow:auto">
         <table class="rc-brk" style="width:100%;border-collapse:collapse;font-size:.85rem">
-          <thead><tr style="background:#f1f4f8"><th style="padding:6px">#</th><th>Item Description (piece)</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Expiry (optional)</th><th></th></tr></thead>
+          <thead><tr style="background:#f1f4f8"><th style="padding:6px">#</th><th style="min-width:170px">Assigned Code <span style="font-weight:400;color:#888">(optional)</span></th><th>Item Description (piece)</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Expiry (optional)</th><th></th></tr></thead>
           <tbody id="rcBrkBody"></tbody>
         </table>
       </div>
@@ -1327,7 +1344,8 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="mo-field">
-        <label>RIS No</label>
+        <label><span id="encNoLbl">RIS No</span> <select id="encDoc" onchange="encDocChanged()" style="display:none;margin-left:6px;padding:2px 6px;font-size:.78rem;width:auto">
+          <option value="RIS">RIS — normal (on the RSPI)</option><option value="PAR">PAR — issued at once, not on the RSPI</option></select></label>
         <input type="text" id="encRisNo" placeholder="e.g. RIS-2026-0001" autocomplete="off"/>
       </div>
       <div class="mo-field">
@@ -1748,6 +1766,9 @@ function switchLogTab(tab){
   document.getElementById('subtabReq').classList.toggle('active', tab==='req');
   document.getElementById('subtabIss').classList.toggle('active', tab==='iss');
   document.getElementById('subtabRsmi').classList.toggle('active', tab==='rsmi');
+  document.getElementById('subtabPar').classList.toggle('active', tab==='par');
+  document.getElementById('logPar').style.display = tab==='par' ? '' : 'none';
+  if (tab==='par') loadParLog();
   document.getElementById('logReq').style.display = tab==='req' ? '' : 'none';
   document.getElementById('logIss').style.display = tab==='iss' ? '' : 'none';
   document.getElementById('logRsmi').style.display = tab==='rsmi' ? '' : 'none';
@@ -1755,8 +1776,27 @@ function switchLogTab(tab){
   if (tab==='rsmi') loadRsmiLog();
 }
 
+var PAR_LOG = [];
+async function loadParLog(){
+  document.getElementById('tbParLog').innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
+  try {
+    PAR_LOG = await fetchAll(function(){ var q = sb.from('v_ris_lines').select('*').eq('doc_type', 'PAR'); if (ME.unit) q = q.eq('ris_unit', ME.unit);
+      return q.order('date', { ascending: false }).order('ris_no').order('id'); });
+    renderParLog();
+  } catch(e){ document.getElementById('tbParLog').innerHTML = '<tr><td colspan="9" style="color:#c62828">' + esc(errText(e)) + (/doc_type/.test(errText(e)) ? ' — has update 54 been run?' : '') + '</td></tr>'; }
+}
+function renderParLog(){
+  var q = (document.getElementById('fltPar').value || '').trim().toLowerCase();
+  var rows = PAR_LOG.filter(function(r){ return !q || [r.ris_no, r.end_user, r.item_code, r.description, r.remarks].join(' ').toLowerCase().indexOf(q) !== -1; });
+  document.getElementById('tbParLog').innerHTML = rows.length ? rows.slice(0, MAX_ROWS).map(function(r){
+    return '<tr><td>' + esc(r.date) + '</td><td><b>' + esc(r.ris_no) + '</b>' + (r.remarks ? '<div style="font-size:11px;color:#666">📝 ' + esc(r.remarks) + '</div>' : '') + '</td><td>' + esc(r.end_user) + '</td>' +
+      '<td>' + esc(r.item_code) + ' — ' + esc(r.description) + '</td><td>' + esc(r.qty_issued == null ? r.qty_requested : r.qty_issued) + ' ' + esc(r.unit || '') + '</td>' +
+      '<td>' + esc(r.location || '—') + '</td><td>' + esc(r.location_incharge || '—') + '</td><td>' + esc(r.source || '—') + '</td><td>' + esc(r.issued_by || '') + '</td></tr>';
+  }).join('') : '<tr><td colspan="9" style="text-align:center;color:#bbb">No PAR yet.</td></tr>';
+}
 function refreshLogView(){
   loadReqLog();
+  if (document.getElementById('subtabPar').classList.contains('active')) loadParLog();
   if (document.getElementById('subtabIss').classList.contains('active')) loadIssLog();
   if (document.getElementById('subtabRsmi').classList.contains('active')) loadRsmiLog();
 }
@@ -1785,7 +1825,7 @@ async function loadIssLog(){
   document.getElementById('tbIssLog').innerHTML = '<tr><td colspan="13">Loading…</td></tr>';
   try {
     var rows = await fetchAll(function(){
-      var q = sb.from('v_ris_lines').select('*').eq('status','Issued').is('rsmi_no', null);
+      var q = sb.from('v_ris_lines').select('*').eq('status','Issued').is('rsmi_no', null).neq('doc_type', 'PAR');   // PAR is not on the RSMI / RSPI
       if (ME.unit) q = q.eq('ris_unit', ME.unit);
       if (from) q = q.gte('date', from);
       if (to) q = q.lte('date', to);
@@ -2076,6 +2116,7 @@ async function openEncodeModal(){
     : '<option value="">— Select unit —</option>' + STOCK_UNITS.map(function(u){ return '<option value="'+esc(u)+'">'+esc(u)+'</option>'; }).join('');
   uSel.disabled = !!ME.unit;
   document.getElementById('encRemarksBox').style.display = ME.unit === 'EQUIPMENT' ? '' : 'none';
+  document.getElementById('encDoc').value = 'RIS'; encDocBox_();
   document.getElementById('moEncode').classList.add('show');
   ENC_FORM = { departments: [], items: [] };
   try {
@@ -2106,8 +2147,20 @@ async function encLoadItems_(){
   });
   document.getElementById('encAvailHint').textContent = ENC_FORM.items.length ? '' : 'No stock yet for ' + unit + '.';
 }
+function encDocChanged(){
+  var par = document.getElementById('encDoc').value === 'PAR' && document.getElementById('encUnit').value === 'EQUIPMENT';
+  document.getElementById('encNoLbl').textContent = par ? 'PAR No' : 'RIS No';
+  document.getElementById('encRisNo').placeholder = par ? 'e.g. PAR-2026-0001' : 'e.g. RIS-2026-0001';
+  var b = document.querySelector('#moEncode .btn-confirm'); if (b) b.textContent = par ? 'Save PAR (issue now)' : 'Submit Request';
+  var d = document.getElementById('encSaveDraft'); if (d) d.style.display = par ? 'none' : '';
+}
+function encDocBox_(){
+  var eq = document.getElementById('encUnit').value === 'EQUIPMENT', s = document.getElementById('encDoc');
+  s.style.display = eq ? '' : 'none'; if (!eq) s.value = 'RIS'; encDocChanged();
+}
 async function encUnitChanged(){
   var unit = document.getElementById('encUnit').value;
+  encDocBox_();
   document.getElementById('encRemarksBox').style.display = unit === 'EQUIPMENT' ? '' : 'none';
   if (ENC_CART.length){ ENC_CART = []; renderEncCart(); }
   document.getElementById('encItemSearch').value = ''; document.getElementById('encItemSel').value = '';
@@ -2154,7 +2207,9 @@ async function submitEncodeForm(asDraft){
 
   var btn = asDraft ? document.getElementById('encSaveDraft') : document.querySelector('#moEncode .btn-confirm'), btnTxt = btn.textContent;
   btn.disabled = true; btn.textContent = asDraft ? 'Saving…' : 'Submitting…';
-  var res = await sb.rpc(asDraft ? 'save_ris_draft' : 'submit_ris', { p: {
+  var isPar = !asDraft && encUnit === 'EQUIPMENT' && document.getElementById('encDoc').value === 'PAR';
+  if (isPar && !confirm('Save PAR ' + risNo + '? The items go OUT of the stock card now (no claim step, not on the RSPI).')){ btn.disabled = false; btn.textContent = btnTxt; return; }
+  var res = await sb.rpc(asDraft ? 'save_ris_draft' : isPar ? 'submit_par' : 'submit_ris', { p: {
     ris_no: risNo, release_date: dateStr, end_user: dept, unit: encUnit, draft_of: ENC_DRAFT_OF || '',
     remarks: encUnit === 'EQUIPMENT' ? document.getElementById('encRemarks').value.trim() : '',
     items: ENC_CART.map(function(c){ return { item_code: c.code, qty: c.qty }; })
@@ -2168,6 +2223,7 @@ async function submitEncodeForm(asDraft){
     return;
   }
   closeEncodeModal(); ENC_DRAFT_OF = null;
+  if (isPar){ showMsg('ok', '📄 PAR ' + res.data.ris_no + ' saved for ' + res.data.end_user + ' — ' + res.data.item_count + ' item(s) issued (out of the stock card). See the 📄 PAR tab.'); loadReqLog(); if (document.getElementById('logPar').style.display !== 'none') loadParLog(); return; }
   if (asDraft){ showMsg('ok', '📝 Draft RIS ' + res.data.ris_no + ' saved — ' + res.data.item_count + ' item(s). It is in Request Transactions in red; click it to continue.'); loadReqLog(); return; }
   showMsg('ok', 'RIS ' + res.data.ris_no + ' encoded for ' + res.data.end_user + ' — ' + res.data.item_count + ' item(s).');
   loadReqLog();
@@ -2700,7 +2756,7 @@ function rcRenderRows(){
     var canBrk = r.locked && r.first && !RC_INOUT && (RC_CAT === 'HARDWARE' || RC_CAT === 'EQUIPMENT');
     var hasParts = !!(r.parts && r.parts.length);
     if (hasParts) itemCell += '<div class="rc-sub" style="color:#1a5e20">🧩 ' + r.parts.length + ' piece(s): ' +
-      r.parts.map(function(p){ return esc(p.qty + ' ' + p.unit + ' ' + p.desc); }).join(', ') + '</div>';
+      r.parts.map(function(p){ return esc(p.qty + ' ' + p.unit + ' ' + (p.code ? p.code + ' ' : '') + p.desc); }).join(', ') + '</div>';
     var brkBtn = canBrk ? '<button type="button" class="btn btn-out btn-sm" title="List the pieces inside this LOT" onclick="rcBrkOpen(' + k + ')">🧩 ' + (hasParts ? 'Edit breakdown' : 'Breakdown') + '</button>' : '';
     var batchBtn = hasParts ? '' : (r.locked || r.itemCode || r.desc) && !RC_CATERING ? '<button type="button" class="btn btn-out btn-sm" title="Same item, another expiry date" onclick="rcAddBatch(' + k + ')">＋ Batch</button>' : '';
     var freeBtn = r.locked && r.first && !hasParts && !RC_CATERING && r.isCoded !== false && !noCode
@@ -2748,7 +2804,8 @@ function rcBrkOpen(key){
 function rcBrkRender(){
   document.getElementById('rcBrkBody').innerHTML = RC_BRK.parts.map(function(p, i){
     return '<tr><td style="padding:4px 6px">' + (i + 1) + '</td>' +
-      '<td><input type="text" list="rcFreeList" value="' + esc(p.desc) + '" placeholder="e.g. PVC PIPE 1/2&quot;" oninput="rcBrkSet(' + i + ',\'desc\',this.value)" onchange="rcBrkDescPicked(' + i + ',this.value)" style="width:100%"/></td>' +
+      '<td><input type="text" list="rcItemList" value="' + esc(p.code || '') + '" placeholder="type code…" onchange="rcBrkCodePicked(' + i + ',this)" style="width:100%"/></td>' +
+      '<td><input type="text" id="rcBrkD' + i + '" list="rcFreeList" value="' + esc(p.desc) + '" placeholder="e.g. PVC PIPE 1/2&quot;" oninput="rcBrkSet(' + i + ',\'desc\',this.value)" onchange="rcBrkDescPicked(' + i + ',this.value)" style="width:100%"/></td>' +
       '<td><input type="text" id="rcBrkU' + i + '" value="' + esc(p.unit) + '" placeholder="pc, set…" oninput="rcBrkSet(' + i + ',\'unit\',this.value)" style="width:70px"/></td>' +
       '<td><input type="number" min="0" step="1" value="' + esc(p.qty) + '" oninput="rcBrkSet(' + i + ',\'qty\',this.value)" style="width:70px"/></td>' +
       '<td><input type="number" min="0" step="0.01" value="' + esc(p.cost) + '" oninput="rcBrkSet(' + i + ',\'cost\',this.value)" style="width:90px"/></td>' +
@@ -2757,6 +2814,17 @@ function rcBrkRender(){
   }).join('');
 }
 function rcBrkSet(i, f, v){ RC_BRK.parts[i][f] = v; }
+// a code typed / picked → its description and unit come from the item list (unit cost and qty are typed)
+function rcBrkCodePicked(i, el){
+  var code = String(el.value || '').split(' — ')[0].trim().toUpperCase(), it = RC_ITEM_BY_CODE[code];
+  var p = RC_BRK.parts[i];
+  if (!code){ p.code = ''; return; }
+  if (!it || code.indexOf('AUTO-') === 0){ p.code = ''; el.value = ''; rcBrkErr('Code "' + code + '" is not in the item list — add it in Master Lists → Item Codes first, or leave the code blank.'); return; }
+  document.getElementById('rcBrkErr').style.display = 'none';
+  p.code = it.code; el.value = it.code; p.desc = it.description; if (it.unit) p.unit = it.unit;
+  var d = document.getElementById('rcBrkD' + i); if (d) d.value = p.desc;
+  var u = document.getElementById('rcBrkU' + i); if (u) u.value = p.unit || '';
+}
 function rcBrkDescPicked(i, v){
   RC_BRK.parts[i].desc = v;
   var hit = RC_ITEMS.filter(function(x){ return x.category === RC_CAT && String(x.description).toUpperCase() === String(v).trim().toUpperCase(); })[0];
@@ -2774,7 +2842,7 @@ function rcBrkOk(){
   if (!parts.length){ rcBrkErr('List at least one piece.'); return; }
   for (var i = 0; i < parts.length; i++){
     var p = parts[i];
-    if (!String(p.desc || '').trim()){ rcBrkErr('Piece #' + (i + 1) + ' needs a description.'); return; }
+    if (!String(p.desc || '').trim()){ rcBrkErr('Piece #' + (i + 1) + ' needs a description (or an assigned code).'); return; }
     if (!String(p.unit || '').trim()){ rcBrkErr('Enter the unit for ' + p.desc + '.'); return; }
     if (!(Number(p.qty) > 0)){ rcBrkErr('Enter the qty for ' + p.desc + '.'); return; }
     p.desc = String(p.desc).trim(); p.unit = String(p.unit).trim(); p.qty = Number(p.qty);
@@ -2793,8 +2861,8 @@ function rcBrkRemoveAll(){
 function groupIarItems(items){
   var order = [], byCode = {};
   items.forEach(function(it){
-    var k = (it.code || ('~' + it.desc + '|' + it.unit)) + (it.free ? '|FREE' : '');
-    if (!byCode[k]){ byCode[k] = { code: it.code, desc: it.desc, unit: it.unit, qty: 0 }; order.push(k); }
+    var k = (it.lot ? 'LOT:' + it.lot + '|' : '') + (it.code || ('~' + it.desc + '|' + it.unit)) + (it.free ? '|FREE' : '');
+    if (!byCode[k]){ byCode[k] = { code: it.code, desc: it.desc, unit: it.unit, qty: 0, lot: it.lot || '' }; order.push(k); }
     byCode[k].qty += (Number(it.qty) || 0);
   });
   return order.map(function(k){ return byCode[k]; });
@@ -2804,7 +2872,7 @@ function rcFormIarData(){
   if (RC_IS_ADV || !RC_PO){ rcAlert('error', 'Select a PO first to preview the IAR.'); return null; }
   var items = [];
   RC_ROWS.filter(function(r){ return r.itemCode && r.qty > 0; }).forEach(function(r){
-    if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: '', desc: p.desc + ' (from LOT: ' + r.desc + ')', unit: p.unit, qty: p.qty }); });
+    if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: p.code || '', desc: p.desc, unit: p.unit, qty: p.qty, lot: r.poDesc || r.desc }); });
     else items.push({ code: r.itemCode, desc: r.desc + (r.free ? ' — FREE GOODS' : ''), unit: r.unit, qty: r.qty, free: !!r.free });
   });
   if (!items.length){ rcAlert('error', 'No items with Qty Received to preview.'); return null; }
@@ -2819,6 +2887,7 @@ function rcFormIarData(){
   });
   return { preview: true, fund: document.getElementById('rcFund').value, poNo: RC_PO, supplier: document.getElementById('rcSup_in').value, pod: document.getElementById('rcPoDate').value,
     invNo: document.getElementById('rcInvNo').value, invDate: document.getElementById('rcInvDate').value,
+    resp: document.getElementById('rcResp').value || (RC_CAT === 'CATERING' && allLines[0] && allLines[0].noa_number ? 'PR# ' + allLines[0].noa_number : ''),
     dateRec: document.getElementById('rcDate').value, loc: rcLocFromDisplay(document.getElementById('rcLoc_in').value),
     items: groupIarItems(items), poComplete: complete };
 }
@@ -2831,6 +2900,7 @@ function rcShowIar(d){
   RC_LAST_IAR = d;
   document.getElementById('rcIarContent').innerHTML = renderIarTemplate(d);
   document.getElementById('rcMoIar').classList.add('show');
+  var md = document.querySelector('#rcMoIar .md'); if (md) md.scrollTop = 0;
 }
 function rcPrintIar(){
   if (!RC_LAST_IAR) return;
@@ -2844,16 +2914,21 @@ function rcPrintIar(){
 }
 
 async function rcIarFromLog(receiveId){
+  RC_LAST_IAR = null;
+  document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#777">⏳ Loading IAR ' + esc(receiveId) + '…</div>';
+  document.getElementById('rcMoIar').classList.add('show');
+  var md0 = document.querySelector('#rcMoIar .md'); if (md0) md0.scrollTop = 0;
   try {
     var rows = await fetchAll(function(){ return sb.from('v_receipt_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id'); });
-    if (!rows.length){ rcAlert('error', 'Receipt not found.'); return; }
+    if (!rows.length){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Receipt ' + esc(receiveId) + ' was not found.</div>'; return; }
     var r0 = rows[0];
     var iar = await fetchAll(function(){ return sb.from('v_iar_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id').order('part_id'); });
-    var po = await sb.from('po_headers').select('po_date,overall_status').eq('po_number', r0.po_number).maybeSingle();
+    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number').eq('po_number', r0.po_number).maybeSingle();
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
+      resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
       dateRec: r0.date, loc: r0.location, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
-      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.from_lot ? ' (from LOT: ' + x.from_lot + ')' : '') + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods }; })) });
-  } catch(e){ rcAlert('error', 'Error: ' + esc(errText(e))); }
+      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
+  } catch(e){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.</div>'; }
 }
 
 // ── SAVE ────────────────────────────────────────────────────────────────────
@@ -2883,7 +2958,7 @@ function rcSave(){
       if (perLine[r.poLineId] > bal){ rcAlert('error', esc(r.itemCode) + ': total Qty Received (' + perLine[r.poLineId] + ') is more than the PO balance (' + bal + ').'); return; }
     }
     var itm = { po_line_id: r.free ? null : r.poLineId, free_goods: !!r.free, free_of_line: r.free ? r.poLineId : null, item_code: r.itemCode, description: r.desc, unit: r.unit, qty_received: r.qty, unit_cost: r.free ? 0 : r.cost, expiry_date: (r.noExp || RC_CATERING || rParts) ? '' : r.exp, remarks: String(r.remarks || '').trim(), batch_no: rcShowBatch_() ? String(r.batchNo || '').trim() : '' };
-    if (rParts) itm.parts = rParts.map(function(p){ return { description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '' }; });
+    if (rParts) itm.parts = rParts.map(function(p){ return { item_code: p.code || '', description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '' }; });
     items.push(itm);
   }
   if (!items.length && !cancels.length){ rcAlert('error', 'Enter a Qty Received on at least one item' + (RC_IS_ADV ? '.' : ', or tick “Cancel Bal.” to close out a line.')); return; }
@@ -3161,15 +3236,20 @@ function offCode(c){ c = String(c == null ? '' : c); return /^(AUTO|TMP)-/i.test
 function renderIarTemplate(o){
 var items = o.items, poComplete = o.poComplete;
 
+var lastLot = null, nLotRows = 0;
 var rowsHtml = items.map(function(it){
-return '<tr><td class="c">'+esc(offCode(it.code))+'</td><td>'+esc(it.desc)+'</td><td class="c">'+esc(it.unit)+'</td>'+
+var head = '';
+if (it.lot && it.lot !== lastLot){ head = '<tr class="lot"><td></td><td>'+esc(it.lot)+'</td><td></td><td></td></tr>'; nLotRows++; }
+lastLot = it.lot || null;
+// a piece of a LOT: its assigned code + qty (the description only while it has no code yet)
+return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+(it.lot && offCode(it.code) ? '' : esc(it.desc))+'</td><td class="c">'+esc(it.unit)+'</td>'+
 '<td class="c">'+it.qty+'</td></tr>';
-}).join('');
+}).join('') + '<tr><td></td><td class="c" style="font-weight:bold">***NOTHING FOLLOWS***</td><td></td><td></td></tr>';
 // Pad the table out with blank ruled rows — same as the official form's
 // printed table, which is a fixed grid of blank rows rather than a table
 // that shrinks to fit however many items were received.
 var IAR_TABLE_ROWS = 40;
-var blankCount = Math.max(IAR_TABLE_ROWS - items.length, 2);
+var blankCount = Math.max(IAR_TABLE_ROWS - items.length - nLotRows - 1, 2);
 for(var b=0;b<blankCount;b++){ rowsHtml += '<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>'; }
 
 function chk(mark){ return '<span class="iar-cb">'+(mark?'X':'')+'</span>'; }
@@ -3189,7 +3269,7 @@ return (
 '<div class="iar-box-row"><div class="l">Supplier : '+ul(o.supplier)+'</div><div class="r">IAR No. : '+ul(o.iarNo || (o.preview ? '(given on Save)' : ''))+'</div></div>'+
 '<div class="iar-box-row"><div class="l">PO No./Date : '+ul(poDisp)+'</div><div class="r">Date : '+ul(o.dateRec)+'</div></div>'+
 '<div class="iar-box-row"><div class="l">Requisitioning Office/Dept. : '+ul(o.loc)+'</div><div class="r">Invoice No. : '+ul(o.invNo)+'</div></div>'+
-'<div class="iar-box-row"><div class="l">Responsibility Center Code : '+ul()+'</div><div class="r">Date : '+ul(o.invDate)+'</div></div>'+
+'<div class="iar-box-row"><div class="l">Responsibility Center Code : '+ul(o.resp)+'</div><div class="r">Date : '+ul(o.invDate)+'</div></div>'+
 '</div>'+
 '<table class="iar-tbl"><colgroup><col style="width:14%"><col><col style="width:10%"><col style="width:12%"></colgroup>'+
 '<thead><tr><th>Stock/<br/>Property No.</th><th>Description</th><th>Unit</th><th>Quantity</th></tr></thead>'+
@@ -3240,6 +3320,9 @@ var IAR_PRINT_CSS =
 '.iar-tbl th,.iar-tbl td{border:1px solid #000;padding:2px 4px;overflow:hidden}'+
 '.iar-tbl th{text-align:center;background:#f0f0f0;font-size:8pt}'+
 '.iar-tbl td{height:17px}'+
+'.iar-tbl tbody td{border-top:none;border-bottom:none}'+
+'.iar-tbl tbody tr:last-child td{border-bottom:1px solid #000}'+
+'.iar-tbl .lot td{font-weight:bold}'+
 '.iar-tbl .c{text-align:center}'+
 '.iar-bot{display:flex;border:1.3px solid #000;border-top:none;min-height:130px}'+
 '.iar-insp{flex:1;border-right:1.3px solid #000;padding:5px 8px;display:flex;flex-direction:column}'+
@@ -3393,6 +3476,8 @@ function poProjUnit(cat){ return cat === 'CATERING' || cat === 'EQUIPMENT' || ca
 function poTxnChange(){ document.getElementById('poTxnHint').style.display = isInOut(document.getElementById('poTxn').value) ? '' : 'none'; }
 function poCategoryChange(){
   var cat = document.getElementById('poCategory').value;
+  document.getElementById('poNoaLbl').textContent = cat === 'CATERING' ? 'PR Number' : 'NOA Number';
+  document.getElementById('poNoa').placeholder = cat === 'CATERING' ? 'e.g. PR# 1436' : 'e.g. NOA-2026-001';
   // CATERING / EQUIPMENT: the End User list is the "Area of Assignment", plus the End-User (person's name)
   document.getElementById('poEULbl').textContent = poAreaUnit(cat) ? 'Area of Assignment' : 'End User';
   document.getElementById('poEU_in').placeholder = poAreaUnit(cat) ? 'Type to search area / office…' : 'Type to search end user…';
@@ -4372,7 +4457,7 @@ function ptRenderSummary(){
   document.getElementById('ptMeta').textContent = 'Showing ' + shown.length + ' of ' + rows.length + ' PO(s)' + (rows.length !== all ? ' (filtered from ' + all + ')' : '') +
     (rows.length > MAX_ROWS ? ' — type in the search box to narrow it down' : '');
   if (!shown.length){ document.getElementById('ptSumArea').innerHTML = '<div class="pt-empty">No matching POs.</div>'; return; }
-  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th>PO No.</th><th>NOA #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
+  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th>PO No.</th><th>NOA # / PR #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
     '<th>Delivery Status</th><th>Lacking / Remarks</th><th>PO Status</th></tr></thead><tbody>';
   shown.forEach(function(p){
     var a = p.rec || {}, n = p.lines.length;
@@ -4382,7 +4467,7 @@ function ptRenderSummary(){
     var amt = a.gross != null && a.gross !== '' ? a.gross : a.amount != null && a.amount !== '' ? a.amount : (n ? p.lineAmt : null);   // no SOP yet → the PO amount
     var lr = [a.lacking ? '<span class="mn-lack">' + esc(lkShort(a.lacking)) + '</span>' : '', esc(String(a.remarks || '').slice(0, 90))].filter(Boolean).join('<br>');
     h += '<tr><td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
-      '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
+      '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR# ' : '') + esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
       '<td><span class="pt-cat">' + esc(p.category || '') + '</span></td><td>' + esc(p.supplier || '') + '</td>' +
       '<td class="pt-wrap">' + items + '</td><td style="text-align:right;white-space:nowrap">' + (amt != null && amt !== '' ? M(amt, false) : '—') + '</td>' +
       '<td>' + (n ? ptDst(p.overall) : '—') + '</td><td class="pt-wrap" style="font-size:.74rem;max-width:260px">' + (lr || '—') + '</td>' +
@@ -4403,7 +4488,7 @@ function ptOpenPo(key){
       '<td>' + esc(l.qty_ordered) + '</td><td>' + esc(l.qty_delivered) + '</td><td>' + esc(l.balance) + '</td><td>' + ptDst(l.delivery_status) + '</td>' +
       '<td>' + ptBadge(l.trail_status, ' onclick="ptOpenLine(' + l.po_line_id + ')" title="Open this item\'s trail"') + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
   box.innerHTML = '<div class="pt-mhead"><b>' + esc(p.po_number) + '</b> — ' + esc(p.supplier || '') + ' <span class="pt-cat">' + esc(p.category || '') + '</span>' +
-      '<div class="pt-msub">' + (ptNoaOf(p.po_number) ? 'NOA # ' + esc(ptNoaOf(p.po_number)) + ' · ' : '') + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
+      '<div class="pt-msub">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR # ' : 'NOA # ') + esc(ptNoaOf(p.po_number)) + ' · ' : '') + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
     '<div class="pt-mstatus">Current PO Status: ' + ptBadge(p.status || 'RACK') + (p.other && p.other !== p.status ? '<span class="pt-note">also ' + esc(p.other) + '</span>' : '') + '</div>' +
     (a ? '<div id="monEdPt"></div>' : '<p class="pt-note">No SOP record yet — the SOP status (For SOP, Pending, Processed …) starts once the PO is finalized FOR SOP or added in SOP Monitoring.</p>') +
     lines + '<div id="ptPoRem"></div>' + ptDocsOnFile(p.po_number) +
@@ -5149,7 +5234,7 @@ function apPoRender(){
         '<div id="apPoTxnHint" class="ap-hint" style="display:none;margin-top:4px"></div></div>' +
       (hasDel && wasIO ? '<div class="ap-f" id="apPoLocBox" style="display:none"><label>Storage Location (delivered items go to stock)</label><select id="apPoLoc"><option value="">-- pick --</option>' +
         apOpt(AP_LISTS.loc.map(function(l){ return l.location; }), '') + '</select></div>' : '') +
-      apField('NOA Number', 'apPoNoa', h.noa_number) + apField('TIN', 'apPoTin', h.tin) +
+      apField(h.category === 'CATERING' ? 'PR Number' : 'NOA Number', 'apPoNoa', h.noa_number) + apField('TIN', 'apPoTin', h.tin) +
       apField('OBR Number', 'apPoObr', h.obr_number) + apField('OBR Date', 'apPoObrD', h.obr_date, { type: 'date' }) +
     '</div><div class="ap-h">Items</div><div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>PO Description</th><th>' + (coded ? 'Assigned Code' : 'Item') + '</th><th>Unit</th><th>End User</th><th>Ordered</th><th>Delivered</th><th>Cancelled</th><th>Unit Cost</th><th>Balance</th><th>Status</th><th>Remove</th></tr></thead><tbody>';
   c.lines.forEach(function(l){
@@ -5614,10 +5699,30 @@ function apMasterList(){
   var f = rows.filter(function(r){ return !q || d.cols.map(function(c){ return r[c[0]]; }).join(' ').toLowerCase().indexOf(q) !== -1; });
   var shown = f.slice(0, 300);
   document.getElementById('apMList').innerHTML = '<div class="ap-h">' + d.label + ' <span class="ap-ro">(' + f.length + (f.length > 300 ? ' — showing 300, type to search' : '') + ')</span></div>' +
-    '<div class="ap-scroll"><table class="ap-tbl"><thead><tr>' + d.cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '<th></th></tr></thead><tbody>' +
-    shown.map(function(r){ return '<tr>' + d.cols.map(function(c){ return '<td>' + esc(r[c[0]] == null ? '' : r[c[0]]) + '</td>'; }).join('') +
+    (AP_MKIND === 'item' ? '<p class="ap-hint" style="margin:0 0 6px">👤 <b>Assigned personnel</b> comes from where the stock is: each Location has an Assigned Person. To change who keeps an item, either change the Assigned Person of the location (Master Lists → Locations → Edit), or move the stock to a location of the other person (🔁 Transfer of Item).</p>' : '') +
+    '<div class="ap-scroll"><table class="ap-tbl"><thead><tr>' + d.cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + (AP_MKIND === 'item' ? '<th>Assigned personnel · location · qty</th>' : '') + '<th></th></tr></thead><tbody>' +
+    shown.map(function(r, i){ return '<tr>' + d.cols.map(function(c){ return '<td>' + esc(r[c[0]] == null ? '' : r[c[0]]) + '</td>'; }).join('') +
+      (AP_MKIND === 'item' ? '<td class="ap-mwhere" data-code="' + esc(r.item_code) + '"><span class="ap-ro">…</span></td>' : '') +
       '<td class="nw">' + (!apMCanEdit() ? '' : '<button class="ap-btn sm" onclick="apMasterEdit(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">Edit</button>') +
       (!apMCanDelete() ? '' : ' <button class="ap-btn sm gray" style="color:#b42318" onclick="apMasterDelete(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">🗑 Delete</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  if (AP_MKIND === 'item') apMasterWhere_(shown.map(function(r){ return r.item_code; }));
+}
+// Item Codes: where the stock is and who keeps it (= the Assigned Person of the location)
+async function apMasterWhere_(codes){
+  var by = {};
+  try {
+    for (var i = 0; i < codes.length; i += 100){
+      var part = codes.slice(i, i + 100);
+      var rows = await fetchAll(function(){ return sb.from('v_inventory_lots').select('item_code,location,location_incharge,qty_on_hand').in('item_code', part).order('item_code'); });
+      rows.forEach(function(l){ var k = l.item_code + '|' + (l.location || '—'); var o = (by[l.item_code] = by[l.item_code] || {});
+        o[k] = o[k] || { loc: l.location || '—', who: l.location_incharge || '', q: 0 }; o[k].q += Number(l.qty_on_hand) || 0; });
+    }
+  } catch(e){}
+  document.querySelectorAll('#apMList td.ap-mwhere').forEach(function(td){
+    var o = by[td.getAttribute('data-code')];
+    td.innerHTML = o ? Object.keys(o).map(function(k){ var x = o[k]; return '<div class="nw"><b>' + esc(x.who || 'no assigned person') + '</b> <span class="ap-ro">· ' + esc(x.loc) + ' · ' + x.q + '</span></div>'; }).join('')
+                     : '<span class="ap-ro">no stock</span>';
+  });
 }
 function apMasterEdit(key){
   var d = AP_MDEF[AP_MKIND];
@@ -5661,7 +5766,7 @@ async function apLogView(){
 // ════════════════════════════════════════════════════════════════════════════
 var RP_TAB = 'summary', RP_CUR = null, RP_INIT = false;
 // ── Choose the columns of a report (remembered per report on this computer) ──
-var RP_PO_COLS = ['PO No.','NOA #','Unit','Type','Fund Cluster','Supplier','PO Date','Due Date','Items','Qty Ordered','Qty Delivered','Balance','Amount','Delivery Status','PO Trail','SOP Status','Lacking Documents (why PENDING)'];
+var RP_PO_COLS = ['PO No.','NOA # / PR #','Unit','Type','Fund Cluster','Supplier','PO Date','Due Date','Items','Qty Ordered','Qty Delivered','Balance','Amount','Delivery Status','PO Trail','SOP Status','Lacking Documents (why PENDING)'];
 var RP_KNOWN = { po: RP_PO_COLS };          // columns of each report (filled after a run for the others)
 function rpHidden(t){ try { return JSON.parse(localStorage.getItem('rp_hide_' + (t || RP_TAB)) || '[]'); } catch(e){ return []; } }
 function rpSetHidden(list){ try { localStorage.setItem('rp_hide_' + RP_TAB, JSON.stringify(list)); } catch(e){} RP_HIDE_MEM[RP_TAB] = list; }
@@ -5936,7 +6041,7 @@ async function rpRun(){
         if (tr === 'RETURNED') tr = 'RETURNED BY ACCTG';
         if (Object.keys(g.trails).length === 1 && g.trails.RACK){ tr = g.b <= 0 ? (g.d > 0 ? 'FOR SOP' : 'CANCELLED') : (g.d > 0 ? 'PARTIAL' : 'RACK'); g.trails = {}; g.trails[tr] = true; }
         return { trails: g.trails, sop: r ? r.sop_status : '', lk: ll,
-          row: [k, l.noa_number || '', l.category, l.txn_type || 'REGULAR STOCK', l.fund_cluster || '', l.supplier, l.po_date, l.due_date || '', g.n, g.o, g.d, g.b, g.amt.toFixed(2), l.overall_status, tr, r ? r.sop_status : '', ll.join('; ')] };
+          row: [k, l.noa_number ? (l.category === 'CATERING' ? 'PR# ' : '') + l.noa_number : '', l.category, l.txn_type || 'REGULAR STOCK', l.fund_cluster || '', l.supplier, l.po_date, l.due_date || '', g.n, g.o, g.d, g.b, g.amt.toFixed(2), l.overall_status, tr, r ? r.sop_status : '', ll.join('; ')] };
       }).concat(only.map(function(r){ var ll = recLack(r);
         return { trails: {}, sop: r.sop_status, lk: ll,
           row: [r.po_number, '', r.unit || '', '—', r.fund_cluster || '', r.supplier || '', '', '', '', '', '', '', r.gross != null ? Number(r.gross).toFixed(2) : (r.amount != null ? Number(r.amount).toFixed(2) : ''), '—', '—', r.sop_status, ll.join('; ') + (r.source === 'IMPORT' ? (ll.length ? ' · ' : '') + 'old app record' : '')] };
