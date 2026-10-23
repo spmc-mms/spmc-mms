@@ -1063,8 +1063,10 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
   <datalist id="rcItemList"></datalist><datalist id="rcFreeList"></datalist>
   <div class="topbar">
     <h1 id="rcTitle">📥 Receive Items</h1>
+    <button class="btn btn-out btn-sm" id="rcDraftsBtn" style="display:none;margin-left:auto;margin-right:8px" onclick="rcDraftsToggle()">📂 Drafts</button>
     <button class="btn btn-out btn-sm" id="rcToggleBtn" onclick="rcToggleView()">📜 View Transactions</button>
   </div>
+  <div class="card" id="rcDraftList" style="display:none;margin-bottom:12px"></div>
   <div class="alert ok" id="rcOk"></div>
   <div class="alert er" id="rcEr"></div>
 
@@ -1139,6 +1141,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <div class="action-bar">
         <button class="btn btn-out" onclick="rcResetForm()">🔄 Reset</button>
         <button class="btn btn-prn" id="rcIarBtn" onclick="rcPreviewIar()">🖨️ Preview IAR</button>
+        <button class="btn btn-out" id="rcDraftBtn" style="border-color:#e0a800;color:#8a5a00" onclick="rcSaveDraft()">📝 Save Draft</button>
         <button class="btn btn-ok" id="rcSaveBtn" onclick="rcSave()">💾 Save</button>
       </div>
     </div>
@@ -1378,6 +1381,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
     </div>
     <div class="mo-actions">
       <button class="btn-cancel" onclick="closeEditRisModal()">Cancel</button>
+      <button class="btn-cancel" id="editPrepBtn" style="background:#e8f0f9;color:#1a3a5c" title="Keep the Qty Issued and the claims — the RIS stays in Request Transactions, nothing is issued yet" onclick="saveRisPrepared()">💾 Save — not yet issued</button>
       <button class="btn-confirm" onclick="saveEditRis()">💾 Save &amp; Transfer to Issuance</button>
     </div>
   </div>
@@ -2196,7 +2200,12 @@ async function openEditRisModal(risNo){
   renderEditItems();
 }
 
+function editKeepQty_(){   // keep the typed Qty Issued when the table is re-drawn
+  if (!EDIT_RIS) return;
+  EDIT_RIS.items.forEach(function(x, k){ var el = document.getElementById('editQty' + k); if (el) x.qtyIssuedDefault = Number(el.value) || 0; });
+}
 async function toggleClaim(i){
+  editKeepQty_();
   var it = EDIT_RIS.items[i];
   var res = await sb.rpc('set_claim_status', { p_line_id: it.id, p_claimed: !it.claimed });
   if (res.error){ showEditErr(errText(res.error)); return; }
@@ -2204,6 +2213,22 @@ async function toggleClaim(i){
   renderEditItems();
 }
 
+// Save the Qty Issued + Claimed without issuing (update 53) — the RIS stays Pending
+async function saveRisPrepared(){
+  if (!EDIT_RIS) return;
+  editKeepQty_();
+  document.getElementById('editErr').style.display = 'none';
+  var lines = EDIT_RIS.items.map(function(it){ var x = { id: it.id, qty: it.invRow ? it.qtyIssuedDefault : 0 }; if (it.needsClaim) x.claimed = !!it.claimed; return x; });
+  var btn = document.getElementById('editPrepBtn'), t = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  var res = await sb.rpc('save_ris_prepared', { p_ris_no: EDIT_RIS.risNo, p_lines: lines });
+  btn.disabled = false; btn.textContent = t;
+  if (res.error){ showEditErr(errText(res.error) + (/save_ris_prepared/.test(errText(res.error)) ? ' — has update 53 been run?' : '')); return; }
+  var no = EDIT_RIS.risNo;
+  closeEditRisModal();
+  showMsg('ok', '💾 RIS ' + no + ' saved — Qty Issued and claims kept. It is still in Request Transactions (not yet issued); open it again and click Save & Transfer when ready.');
+  loadReqLog();
+}
 async function saveEditRis(){
   if (!EDIT_RIS) return;
   document.getElementById('editErr').style.display='none';
@@ -2374,7 +2399,79 @@ async function rcInit(){
   if (CAN_EDIT && document.getElementById('rcForm').style.display !== 'none') await rcLoadFormData();
 }
 
+// ── RECEIVE DRAFTS (update 52) ───────────────────────────────────────────────
+var RC_DRAFT_ID = null, RC_DRAFTS = [];
+var RC_HDR_IDS = ['rcDate','rcSup_in','rcLoc_in','rcInvNo','rcInvDate','rcFund','rcReqOff','rcResp'];
+async function rcLoadDrafts(){
+  try {
+    RC_DRAFTS = await fetchAll(function(){ var q = sb.from('receive_drafts').select('id,kind,category,po_number,supplier,saved_by,saved_at'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('saved_at', { ascending: false }); });
+  } catch(e){ RC_DRAFTS = []; }
+  var b = document.getElementById('rcDraftsBtn');
+  if (b){ b.style.display = RC_DRAFTS.length ? '' : 'none'; b.textContent = '📂 Drafts (' + RC_DRAFTS.length + ')'; }
+  if (document.getElementById('rcDraftList').style.display !== 'none') rcDraftsRender();
+}
+function rcDraftsToggle(){ var el = document.getElementById('rcDraftList'); el.style.display = el.style.display === 'none' ? '' : 'none'; rcDraftsRender(); }
+function rcDraftsRender(){
+  var el = document.getElementById('rcDraftList');
+  el.innerHTML = '<h2>📂 Saved drafts</h2>' + (RC_DRAFTS.length ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Saved</th><th>Unit</th><th>Type</th><th>PO No.</th><th>Supplier</th><th>By</th><th></th></tr></thead><tbody>' +
+    RC_DRAFTS.map(function(d){ return '<tr' + (d.id === RC_DRAFT_ID ? ' style="background:#fff8e6"' : '') + '><td class="nowrap">' + esc(String(d.saved_at || '').replace('T', ' ').slice(0, 16)) + '</td><td>' + esc(d.category || '') + '</td><td>' + esc(d.kind) + '</td>' +
+      '<td class="nowrap"><b>' + esc(d.po_number || '—') + '</b></td><td>' + esc(d.supplier || '') + '</td><td>' + esc(d.saved_by || '') + '</td>' +
+      '<td class="nowrap"><button class="btn btn-ok btn-sm" onclick="rcOpenDraft(' + d.id + ')">Open</button> <button class="btn btn-del btn-sm" onclick="rcDeleteDraft(' + d.id + ')">🗑</button></td></tr>'; }).join('') +
+    '</tbody></table></div>' : '<p class="item-hint">No drafts.</p>');
+}
+async function rcSaveDraft(){
+  if (!RC_CAT){ rcAlert('error', 'Please select a Category / Unit.'); return; }
+  if (!RC_IS_ADV && !RC_PO){ rcAlert('error', 'Please select a PO number first.'); return; }
+  var hdr = {}; RC_HDR_IDS.forEach(function(id){ hdr[id] = document.getElementById(id).value; });
+  var rows = RC_ROWS.map(function(r){ var x = Object.assign({}, r); delete x.key; return x; });
+  var btn = document.getElementById('rcDraftBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+  var r = await sb.rpc('save_receive_draft', { p: { id: RC_DRAFT_ID || '', kind: RC_IS_ADV ? 'ADVANCE' : 'PO', category: RC_CAT, po_number: RC_PO || '',
+    supplier: document.getElementById('rcSup_in').value.trim(), payload: { hdr: hdr, rows: rows, po: RC_PO, adv: RC_IS_ADV } } });
+  btn.disabled = false; btn.textContent = '📝 Save Draft';
+  if (r.error){ rcAlert('error', esc(errText(r.error)) + (/receive_draft/.test(errText(r.error)) ? ' — has update 52 been run?' : '')); return; }
+  RC_DRAFT_ID = r.data.id;
+  rcAlert('ok', '📝 Draft saved' + (RC_PO ? ' for PO <b>' + esc(RC_PO) + '</b>' : '') + ' — nothing went to stock yet. Open it any time from <b>📂 Drafts</b>, then click 💾 Save.');
+  rcLoadDrafts();
+}
+async function rcOpenDraft(id){
+  var r = await sb.from('receive_drafts').select('*').eq('id', id).maybeSingle();
+  if (r.error || !r.data){ rcAlert('error', 'Draft not found — refresh.'); rcLoadDrafts(); return; }
+  var d = r.data, pl = d.payload || {}, hdr = pl.hdr || {};
+  if (!RC_IS_ADV !== !pl.adv){ document.getElementById('rcType').value = pl.adv ? 'ADVANCE' : 'PO'; }
+  var cat = document.getElementById('rcCat'); if (cat.value !== d.category){ cat.value = d.category; }
+  rcCatChange();
+  var notes = [];
+  if (!pl.adv && pl.po){
+    if (!RC_PO_MAP[pl.po]) await rcLoadFormData();
+    if (!RC_PO_MAP[pl.po]){ rcAlert('error', 'PO ' + esc(pl.po) + ' has no open balance any more — the draft cannot be used. Delete it.'); return; }
+    document.getElementById('rcPo_in').value = pl.po + ' — ' + (RC_PO_MAP[pl.po].supplier || '');
+    rcSelectPo(pl.po);
+    var fresh = {}; RC_ROWS.forEach(function(x){ if (x.first) fresh[x.poLineId] = x; });
+    RC_ROWS = (pl.rows || []).map(function(x){
+      var y = Object.assign({}, x, { key: ++RC_ROW_SEQ }), f = fresh[x.poLineId];
+      if (x.locked){ if (f){ y.balance = f.balance; y.ordered = f.ordered; y.itemCode = f.itemCode; y.desc = f.desc; y.isCoded = f.isCoded; } else { y.balance = 0; notes.push(x.desc || x.itemCode); } }
+      return y;
+    });
+    Object.keys(fresh).forEach(function(k){ if (!RC_ROWS.some(function(x){ return String(x.poLineId) === String(k); })){ var f = fresh[k]; f.key = ++RC_ROW_SEQ; RC_ROWS.push(f); } });
+  } else {
+    RC_ROWS = (pl.rows || []).map(function(x){ return Object.assign({}, x, { key: ++RC_ROW_SEQ }); });
+  }
+  RC_HDR_IDS.forEach(function(k){ if (hdr[k] != null && (k !== 'rcFund' || pl.adv)) document.getElementById(k).value = hdr[k]; });
+  RC_DRAFT_ID = d.id;
+  rcRenderRows();
+  document.getElementById('rcDraftList').style.display = 'none';
+  rcAlert('ok', '📂 Draft opened' + (pl.po ? ' — PO <b>' + esc(pl.po) + '</b>' : '') + ' (saved ' + esc(String(d.saved_at || '').replace('T', ' ').slice(0, 16)) + ' by ' + esc(d.saved_by || '') + '). Check it, then 💾 Save — or 📝 Save Draft again.' +
+    (notes.length ? ' ⚠ Already fully delivered since the draft: ' + esc(notes.join(', ')) + '.' : ''));
+}
+async function rcDeleteDraft(id){
+  if (!confirm('Delete this draft? What was typed in it will be lost.')) return;
+  var r = await sb.rpc('delete_receive_draft', { p_id: id });
+  if (r.error){ rcAlert('error', esc(errText(r.error))); return; }
+  if (RC_DRAFT_ID === id) RC_DRAFT_ID = null;
+  rcLoadDrafts();
+}
 async function rcLoadFormData(){
+  rcLoadDrafts();
   setLoading(true);
   try {
     var lines = await fetchAll(function(){
@@ -2845,6 +2942,7 @@ async function rcDoSave(payload, iar){
     window._rcSavedIar = iar;
     parts.push('<a href="#" onclick="event.preventDefault();rcShowIar(window._rcSavedIar)">🖨️ Print IAR for this receipt →</a>');
   }
+  if (RC_DRAFT_ID && d.receive_id){ try { await sb.rpc('delete_receive_draft', { p_id: RC_DRAFT_ID }); } catch(e){} parts.push('(draft removed)'); }
   rcResetForm(true);
   rcAlert('ok', parts.join(' '));
   if (!rcCoded()) RC_ITEMS = [];   // new typed item may have been created — reload list
@@ -2858,7 +2956,7 @@ function rcResetForm(keepAlert){
   document.getElementById('rcLoc_in').value = '';
   document.getElementById('rcDate').value = ymd(new Date());
   document.getElementById('rcPill').classList.remove('show');
-  RC_PO = null; RC_CATERING = RC_CAT === 'CATERING'; RC_ROWS = [];
+  RC_PO = null; RC_CATERING = RC_CAT === 'CATERING'; RC_ROWS = []; RC_DRAFT_ID = null;
   if (RC_IS_ADV) rcAdvClear();
   rcRenderRows();
   if (!keepAlert){ document.getElementById('rcOk').style.display = 'none'; document.getElementById('rcEr').style.display = 'none'; }
@@ -4112,7 +4210,7 @@ async function ptLoad(quiet){
     var res = await Promise.all([
       fetchAll(function(){ return sb.from('v_po_trail').select('*').order('date_created', { ascending: false }).order('trail_id', { ascending: false }); }),
       needLines ? fetchAll(function(){
-        return sb.from('v_po_lines').select('po_line_id,po_number,supplier,category,item_code,description,unit,qty_ordered,qty_delivered,balance,delivery_status,overall_status,trail_id,trail_status')
+        return sb.from('v_po_lines').select('po_line_id,po_number,supplier,category,item_code,description,unit,qty_ordered,qty_delivered,balance,delivery_status,overall_status,trail_id,trail_status,total_amount')
           .order('po_number').order('po_line_id');
       }) : Promise.resolve([])
     ]);
@@ -4216,7 +4314,8 @@ function ptKey(po){ return String(po || '').trim().toUpperCase(); }
 function ptPOs(){
   var map = {}, keys = [];
   var get = function(po){ var k = ptKey(po); if (!map[k]){ map[k] = { key: k, po_number: String(po || '').trim(), lines: [], rec: null, supplier: '', category: '', overall: '' }; keys.push(k); } return map[k]; };
-  PT_LINES.forEach(function(l){ var p = get(l.po_number); p.lines.push(l); p.supplier = p.supplier || l.supplier; p.category = p.category || l.category; p.overall = l.overall_status || p.overall; });
+  PT_LINES.forEach(function(l){ var p = get(l.po_number); p.lines.push(l); p.supplier = p.supplier || l.supplier; p.category = p.category || l.category; p.overall = l.overall_status || p.overall;
+    p.lineAmt = (p.lineAmt || 0) + (Number(l.total_amount) || 0); });
   PT_AS_ROWS.forEach(function(r){ if (!r.po_number) return; var p = get(r.po_number);
     if (!p.rec || (!p.rec.id && r.id) || (!!r.id === !!p.rec.id && String(r.updated_at || '') > String(p.rec.updated_at || ''))) p.rec = r;
     p.supplier = p.supplier || r.supplier; p.category = p.category || r.unit; });
@@ -4272,7 +4371,7 @@ function ptRenderSummary(){
     var items = n ? '<b>' + n + ' item' + (n === 1 ? '' : 's') + '</b>' + (a.category ? ' · ' + esc(a.category) : '') +
         '<div class="pt-note" style="margin:0;white-space:normal">' + esc(p.lines.slice(0, 2).map(function(l){ return l.description; }).join('; ').slice(0, 110)) + (n > 2 ? ' …' : '') + '</div>'
       : esc(a.category || '');
-    var amt = a.gross != null ? a.gross : a.amount;
+    var amt = a.gross != null && a.gross !== '' ? a.gross : a.amount != null && a.amount !== '' ? a.amount : (n ? p.lineAmt : null);   // no SOP yet → the PO amount
     var lr = [a.lacking ? '<span class="mn-lack">' + esc(lkShort(a.lacking)) + '</span>' : '', esc(String(a.remarks || '').slice(0, 90))].filter(Boolean).join('<br>');
     h += '<tr><td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
       '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
@@ -4754,13 +4853,23 @@ async function apBegView(){
 }
 function apBegCan(){ return ME.role === 'Approver'; }
 // Items in the item list that have NO beginning batch (beginning balance 0) — shown so they can still be searched and given a batch
+// which stock unit an item belongs to: items.category is the item class (MEDICAL, OFFICE, LAB …) for SUPPLIES
+function apBegUnitOf(i){
+  var c = String(i.category || '').toUpperCase().trim(), code = String(i.item_code || '');
+  if (code.indexOf('AUTO-') === 0 || code.indexOf('TMP-') === 0) return '';
+  if (STOCK_UNITS.indexOf(c) !== -1) return c;
+  if (c === 'FLUIDS' || c === 'DRUGS' || c === 'MEDICINES') return 'DRUGS AND MEDS';
+  if (c === 'CATERING') return '';
+  return 'SUPPLIES UNIT';
+}
 function apBegVirtual(){
   var units = myUnits() || STOCK_UNITS, have = {};
   BEG_ROWS.forEach(function(r){ have[r.item_code + '|' + r.stock_unit] = 1; });
   return ((AP_LISTS && AP_LISTS.items) || []).filter(function(i){
-    return units.indexOf(i.category) !== -1 && !have[i.item_code + '|' + i.category] && String(i.status || '').toUpperCase() !== 'INACTIVE';
+    var u = apBegUnitOf(i);
+    return u && units.indexOf(u) !== -1 && !have[i.item_code + '|' + u] && String(i.status || '').toUpperCase() !== 'INACTIVE';
   }).map(function(i){
-    return { id: 'v:' + i.item_code, virtual: true, stock_unit: i.category, item_code: i.item_code, description: i.description, uom: i.unit,
+    return { id: 'v:' + i.item_code, virtual: true, stock_unit: apBegUnitOf(i), item_code: i.item_code, description: i.description, uom: i.unit,
              expiry_date: null, location: null, source_ref: '', qty_in: 0, qty_on_hand: 0, qty_adjusted: 0, manual_ris: false };
   });
 }
