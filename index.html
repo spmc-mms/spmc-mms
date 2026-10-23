@@ -1220,7 +1220,8 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
   <!-- IAR preview -->
   <div class="mo" id="rcMoIar">
     <div class="md wide">
-      <h3>🖨️ IAR Preview</h3>
+      <h3 style="display:flex;align-items:center;gap:10px">🖨️ IAR Preview <span style="flex:1"></span>
+        <button class="btn btn-prn btn-sm" onclick="rcPrintIar()">🖨️ Print</button><button class="btn btn-out btn-sm" onclick="rcCloseM('rcMoIar')">✕</button></h3>
       <div id="rcIarContent" style="border:1px solid #e2e8f0;padding:14px;background:#fff"></div>
       <div class="md-act">
         <button class="btn btn-out" onclick="rcCloseM('rcMoIar')">Close</button>
@@ -2924,14 +2925,14 @@ function rcShowIar(d){
   var md = document.querySelector('#rcMoIar .md'); if (md) md.scrollTop = 0;
 }
 function rcPrintIar(){
-  if (!RC_LAST_IAR) return;
-  var w = window.open('', '_blank');
-  if (!w){ rcAlert('error', 'Your browser blocked the print window — please allow pop-ups and try again.'); return; }
-  w.document.open();
-  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAR ' + esc(RC_LAST_IAR.poNo || '') + '</title><style>' + IAR_PRINT_CSS + '</style></head><body>' + mdyText(renderIarTemplate(RC_LAST_IAR)) + '</body></html>');
-  w.document.close();
-  w.focus();
-  setTimeout(function(){ w.print(); }, 350);
+  if (!RC_LAST_IAR){ alert('The IAR is still loading — wait a moment, then click Print again.'); return; }
+  var fr = document.getElementById('iarPrintFrame');
+  if (!fr){ fr = document.createElement('iframe'); fr.id = 'iarPrintFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(fr); }
+  var doc = fr.contentWindow.document;
+  doc.open();
+  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAR ' + esc(RC_LAST_IAR.iarNo || RC_LAST_IAR.poNo || '') + '</title><style>' + IAR_PRINT_CSS + '</style></head><body>' + mdyText(renderIarTemplate(RC_LAST_IAR)) + '</body></html>');
+  doc.close();
+  setTimeout(function(){ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ alert('Could not open the print window: ' + e.message); } }, 400);
 }
 
 async function rcIarFromLog(receiveId){
@@ -3267,7 +3268,7 @@ var head = '';
 if (it.lot && it.lot !== lastLot){ head = '<tr class="lot"><td></td><td>'+esc(it.lot)+'</td><td></td><td></td></tr>'; nLotRows++; }
 lastLot = it.lot || null;
 // a piece of a LOT: its assigned code + qty (the description only while it has no code yet)
-return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+(it.lot && offCode(it.code) ? '' : esc(it.desc))+'</td><td class="c">'+esc(it.unit)+'</td>'+
+return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+esc(it.desc)+'</td><td class="c">'+esc(it.unit)+'</td>'+
 '<td class="c">'+it.qty+'</td></tr>';
 }).join('') + '<tr><td></td><td class="c" style="font-weight:bold">***NOTHING FOLLOWS***</td><td></td><td></td></tr>';
 rowsHtml = projRow + rowsHtml;
@@ -3631,11 +3632,11 @@ function poBulkOpen(){
   PO_BULK = null; el.style.display = '';
   el.innerHTML = '<div class="bulk-box"><b>📋 Bulk Items</b> — in Excel, select the rows of the PO\'s items (Description, and if you have them: Item Code, Unit, Qty, Unit Cost), copy (Ctrl + C), then paste here (Ctrl + V).' +
     '<textarea id="poBulkTxt" rows="7" placeholder="Paste the rows here…" oninput="poBulkParse()"></textarea>' +
-    '<div id="poBulkPrev" class="item-hint">The rows will show here so you can check them before adding to the cart. The Qty can be typed later in the Cart.</div>' +
+    '<div id="poBulkPrev" class="item-hint">Copy the Unit, Qty and Unit Cost columns too — they go straight into the Cart (a header row like DESCRIPTION / UNIT / QTY / UNIT COST makes it exact). Anything missing can be typed in the Cart.</div>' +
     '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn btn-add" id="poBulkAdd" onclick="poBulkAdd()" disabled>+ Add to Cart</button><button class="btn btn-clear" onclick="PO_BULK=null;document.getElementById(\'poBulk\').style.display=\'none\'">Close</button></div></div>';
   document.getElementById('poBulkTxt').focus();
 }
-function poBulkNum(v){ var s = String(v || '').replace(/[₱,\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null; }
+function poBulkNum(v){ var s = String(v || '').replace(/[₱,\s]/g, '').replace(/^(?:php|p)(?=\d)/i, ''); return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null; }
 function poBulkParse(){
   var txt = document.getElementById('poBulkTxt').value.replace(/\r/g, '');
   // Excel puts quotes around a cell with line breaks — keep it one cell
@@ -3657,10 +3658,10 @@ function poBulkParse(){
   var H = { code: /code/i, desc: /desc|particular|item|article/i, unit: /^(unit|uom|u\/m)\b/i, qty: /qty|quantity/i, cost: /cost|price/i };
   var head = rows[0], map = [], isHead = head.some(function(c){ return /desc|particular|qty|quantity|unit|cost|price|code/i.test(c); }) && !head.some(function(c){ return poBulkNum(c) !== null; });
   if (isHead){
-    head.forEach(function(c, j){ var f = ''; ['code', 'qty', 'cost', 'unit', 'desc'].some(function(k){ if (H[k].test(c) && map.indexOf(k) === -1){ f = k; return true; } }); map[j] = f; });
+    head.forEach(function(c, j){ var f = ''; ['code', 'qty', 'cost', 'unit', 'desc'].some(function(k){ if (!/total|amount/i.test(c) && H[k].test(c) && map.indexOf(k) === -1){ f = k; return true; } }); map[j] = f; });
   } else {
     // guess from the cells: codes like A0123, numbers (whole = qty, decimals / big = cost), short text = unit, long text = description
-    var data = rows, used = {};
+    var data = rows, used = {}, texts = [];
     for (var j = 0; j < nc; j++){
       var col = data.map(function(r){ return r[j]; }).filter(function(c){ return c; });
       var nums = col.filter(function(c){ return poBulkNum(c) !== null; }).length;
@@ -3669,10 +3670,13 @@ function poBulkParse(){
       var f = '';
       if (col.length && codes >= col.length * .6 && !used.code) f = 'code';
       else if (col.length && nums >= col.length * .6){ var dec = col.some(function(c){ return /\.\d/.test(c); }); f = !used.qty && !dec ? 'qty' : !used.cost ? 'cost' : ''; }
-      else if (len > 14 && !used.desc) f = 'desc';
-      else if (len && len <= 14 && !used.unit) f = 'unit';
+      else if (len) texts.push({ j: j, len: len });
       if (f) used[f] = true; map[j] = f;
     }
+    // text columns: the longest is the Description, a short one (PCS, BOX, ROLL…) is the Unit
+    texts.sort(function(a, b){ return b.len - a.len; });
+    if (texts.length && !used.desc){ map[texts[0].j] = 'desc'; used.desc = true; texts.shift(); }
+    texts.some(function(t){ if (t.len <= 12 && !used.unit){ map[t.j] = 'unit'; used.unit = true; return true; } });
     if (!used.desc){ var best = -1, bl = -1; for (var k = 0; k < nc; k++){ var L = rows.reduce(function(a, r){ return a + r[k].length; }, 0); if (!map[k] && L > bl){ bl = L; best = k; } } if (best >= 0) map[best] = 'desc'; }
   }
   PO_BULK = { rows: isHead ? rows.slice(1) : rows, map: map, header: isHead, nc: nc };
@@ -3712,7 +3716,7 @@ function poBulkAdd(){
   items.forEach(function(x){ x.group = ''; delete x.codeTyped; PO_CART.push(x); });
   PO_BULK = null; document.getElementById('poBulk').style.display = 'none';
   poRenderCart();
-  poMsg('✅ ' + items.length + ' item(s) added to the Cart — type the Qty (and the Unit / Unit Cost if blank) in the Cart, then Submit PO.', 'ok');
+  poMsg('✅ ' + items.length + ' item(s) added to the Cart with their Unit, Qty and Unit Cost — fill in only what is blank, then Submit PO.', 'ok');
   document.getElementById('poCartArea').scrollIntoView && document.getElementById('poCartArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
