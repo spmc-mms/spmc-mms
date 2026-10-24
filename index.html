@@ -2382,7 +2382,7 @@ var RC_LAST_IAR = null;
 var RC_CATERING = false;
 var RC_INOUT = false;
 var RC_CAT = '';
-var RC_CODED_CATS = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES'];
+var RC_CODED_CATS = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES','NSCM'];
 function rcCoded(){ return RC_CODED_CATS.indexOf(RC_CAT) !== -1; }
 function rcCanCode(){ return rcCoded() || RC_CAT === 'EQUIPMENT' || RC_CAT === 'HARDWARE'; }
 
@@ -3375,9 +3375,11 @@ var IAR_PRINT_CSS =
 var TXN_TYPES = ['REGULAR STOCK','DONATION (STOCKED)','DONATION (IN & OUT)','EXPENSE','PERISHABLE ITEMS'];
 var TXN_INOUT = ['DONATION (IN & OUT)','EXPENSE','PERISHABLE ITEMS'];
 function isInOut(t){ return TXN_INOUT.indexOf(t) !== -1; }
-var PO_CATEGORIES = ['SUPPLIES UNIT','DRUGS AND MEDS','GASES','EQUIPMENT','HARDWARE','CATERING'];
+var PO_CATEGORIES = ['SUPPLIES UNIT','DRUGS AND MEDS','GASES','NSCM','EQUIPMENT','HARDWARE','CATERING'];
 var STOCK_UNITS = PO_CATEGORIES.filter(function(c){ return c !== 'CATERING'; });
-var PO_CODED = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES'];
+var PO_CODED = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES','NSCM'];
+// which items a unit picks from: EQUIPMENT / HARDWARE / NSCM use only their own item codes; the others use every code except NSCM's
+function unitItemOk(cat, c){ c = String(c || '').toUpperCase(); return (cat === 'EQUIPMENT' || cat === 'HARDWARE' || cat === 'NSCM') ? c === cat : c !== 'NSCM'; }
 var PO_FUNDS = ['Regular Agency Fund (01)','Internal Generated Fund (5)','Trust Fund (07)'];
 var PO_MODES = ['Public Bidding','Agency to Agency','Direct Contracting','Negotiated Procurement','Small Value Procurement','Emergency Purchase',
   'Public Bidding 1st','Public Bidding 1st Full','Public Bidding 2nd','Public Bidding 2nd Full',
@@ -3525,7 +3527,7 @@ function poCategoryChange(){
   document.getElementById('poCateringNote').style.display = cat === 'CATERING' ? '' : 'none';
   // Coded units pick from the real item list (no AUTO- codes); typed-in units get
   // suggestions from descriptions already used in that same unit.
-  PO_ITEM_KEYS = PO_ITEMS.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && ((cat !== 'EQUIPMENT' && cat !== 'HARDWARE') || String(i.category || '').toUpperCase() === cat); })
+  PO_ITEM_KEYS = PO_ITEMS.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && unitItemOk(cat, i.category); })
     .map(function(i){ return i.item_code + ' — ' + i.description; });
   PO_FREE_DESCS = {};
   PO_ITEMS.forEach(function(i){ if (String(i.category || '').toUpperCase() === cat && i.item_code.indexOf('AUTO-') === 0) PO_FREE_DESCS[i.description] = i.unit || ''; });
@@ -3689,7 +3691,7 @@ function poBulkItems(){
     var desc = col(r, 'desc'), code = col(r, 'code').toUpperCase().replace(/\s+/g, ''), m;
     if (!code && (m = desc.match(/\(([A-Z]{1,3}\d{2,6}[A-Z]{0,3})\)\s*$/i))) code = m[1].toUpperCase();
     var it = code && coded ? PO_ITEMS.filter(function(x){ return x.item_code.toUpperCase() === code && x.item_code.indexOf('AUTO-') !== 0 &&
-      (!eq || String(x.category || '').toUpperCase() === cat); })[0] : null;
+      unitItemOk(cat, x.category); })[0] : null;
     var cost = poBulkNum(col(r, 'cost'));
     return { cat: cat, item_code: it ? it.item_code : '', description: desc || (it ? it.description : ''), unit: col(r, 'unit') || (it ? it.unit || '' : ''),
              qty: poBulkNum(col(r, 'qty')) || 0, unit_cost: cost === null ? NaN : cost, assignedDesc: it ? it.description : '', codeTyped: code && !it ? code : '' };
@@ -4403,7 +4405,7 @@ function ptRender(){
   var el = document.getElementById('ptPanels');
   var radius = PT_TABS.length <= 1 ? ' style="border-radius:10px"' : '';
   if (PT_TAB === 'summary'){
-    var cats = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'EQUIPMENT', 'HARDWARE', 'CATERING'];
+    var cats = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM', 'EQUIPMENT', 'HARDWARE', 'CATERING'];
     el.innerHTML = '<div class="pt-panel"' + radius + '>' +
       '<div class="pt-title">Summary — every PO, at any status</div>' +
       '<div class="pt-hint">One row per PO, every unit, at any status — receiving, inspection, acceptance, then For SOP, Pending, Transmitted to CAO, Returned by Acctg, Processed and Filed (records from the old PO Monitoring app included). The PO with the latest status change is on top. Click a PO Status to open the PO: its status trail, lacking requirements and items.</div>' +
@@ -4907,7 +4909,7 @@ function dashRender(d){
 //  Approver: all tabs.  Admin: Master Lists (+ Edit Log) only.
 // ════════════════════════════════════════════════════════════════════════════
 var AP_TAB = null, AP_LISTS = null, AP_CUR = null;
-var AP_UNITS_CODED = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES'];
+var AP_UNITS_CODED = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES','NSCM'];
 var AP_RO = true;   // Admin = view only (plus adding suppliers / end users / item codes)
 // View-only mode: every field is locked and only the View / Print buttons stay.
 function apLock(){
@@ -5267,7 +5269,7 @@ function apPoRender(){
   var c = AP_CUR, h = c.h, coded = AP_UNITS_CODED.indexOf(h.category) !== -1 || h.category === 'EQUIPMENT' || h.category === 'HARDWARE';
   var hasDel = c.lines.some(function(l){ return apNum(l.qty_delivered) > 0; }), wasIO = isInOut(h.txn_type);
   var html = apDl('apSupDl', AP_LISTS.sup.map(function(s){ return s.supplier_name; })) + apDl('apEuDl', AP_LISTS.eu.map(function(e){ return e.end_user_name; })) +
-    apDl('apItemDl', AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && (!coded || !(h.category === 'EQUIPMENT' || h.category === 'HARDWARE') || String(i.category || '').toUpperCase() === h.category); })
+    apDl('apItemDl', AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && (!coded || unitItemOk(h.category, i.category)); })
       .map(function(i){ return i.item_code + ' — ' + i.description; })) +
     '<div class="ap-h">PO ' + esc(h.po_number) + ' <span class="ap-tag">' + esc(h.category) + '</span> <span class="ap-tag ' + (h.overall_status === 'COMPLETE' ? 'ok' : 'warn') + '">' + esc(h.overall_status) + '</span></div>' +
     '<div class="ap-grid">' +
@@ -5675,30 +5677,57 @@ function apRsmiDelete(){
 }
 
 // ── TRANSFER OF ITEM ────────────────────────────────────────────────────────
+var AP_XF_KIND = 'LOCATION';
 async function apXferOpen(key){
   var code = key || apVal('apKey'); if (!code) return;
   try {
     var lots = await fetchAll(function(){ return sb.from('v_inventory_lots').select('id,item_code,description,unit,stock_unit,location,expiry_date,source_type,source_ref,qty_on_hand').eq('item_code', code).order('expiry_date', { ascending: true, nullsFirst: false }).order('id'); });
     AP_CUR = { kind: 'xfer', code: code, lots: lots };
-    var locs = AP_LISTS.loc.map(function(l){ return l.location; });
+    var locs = AP_LISTS.loc.map(function(l){ return l.location; }), K = AP_XF_KIND, mu = myUnits();
+    var kinds = [['LOCATION', '📍 Another location'], ['UNIT', '🏷 Another unit'], ['CODE', '🔢 Another item code (same unit)']];
+    var head = K === 'LOCATION' ? '<th>Move To</th>' : K === 'UNIT' ? '<th>To Unit</th><th>Location</th>' : '<th>To Item Code</th><th>Location</th>';
+    var target = function(l){
+      if (K === 'LOCATION') return '<td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(locs.filter(function(x){ return x !== l.location; })) + '</select></td>';
+      var loc = '<td><select id="apXfLoc' + l.id + '"><option value="">same (' + esc(l.location || '—') + ')</option>' + apOpt(locs.filter(function(x){ return x !== l.location; })) + '</select></td>';
+      if (K === 'UNIT') return '<td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(STOCK_UNITS.filter(function(u){ return u !== l.stock_unit; })) + '</select></td>' + loc;
+      return '<td><input type="text" list="apXfCodes" id="apXfTo' + l.id + '" placeholder="type code or description" style="min-width:220px"/></td>' + loc;
+    };
+    var hint = K === 'LOCATION' ? 'Moving part of a batch splits it into two batches with the same expiry and source. Stock totals and the stock card do not change.'
+      : K === 'UNIT' ? 'The qty goes OUT of this unit\'s stock card and IN to the other unit\'s stock card (TRF- number), with the same expiry, PO and unit cost.'
+      : 'Use this when the item was received under the wrong code. The qty goes OUT of this code\'s stock card and IN to the new code\'s stock card (TRF- number), same unit, expiry, PO and unit cost.';
     document.getElementById('apEd').innerHTML = !lots.length ? '<div class="ap-empty">No stock on hand for "' + esc(code) + '".</div>' :
       '<div class="ap-h">' + esc(lots[0].item_code) + ' — ' + esc(lots[0].description) + '</div>' +
-      '<div class="ap-grid">' + apField('Transfer Date', 'apXfDate', ymd(new Date()), { type: 'date' }) + apField('Remarks (optional)', 'apXfRem', '') + '</div>' +
-      '<table class="ap-tbl"><thead><tr><th>Batch</th><th>Unit</th><th>Location</th><th>Expiry</th><th>Source</th><th>On Hand</th><th>Qty to Move</th><th>Move To</th><th></th></tr></thead><tbody>' +
+      '<div class="ap-grid"><div class="ap-f"><label>Transfer to</label><select id="apXfKind" onchange="AP_XF_KIND=this.value;apXferOpen(AP_CUR.code)">' +
+        kinds.map(function(k){ return '<option value="' + k[0] + '"' + (k[0] === K ? ' selected' : '') + '>' + k[1] + '</option>'; }).join('') + '</select></div>' +
+        apField('Transfer Date', 'apXfDate', ymd(new Date()), { type: 'date' }) + apField('Remarks (optional)', 'apXfRem', '') + '</div>' +
+      (K === 'CODE' ? apDl('apXfCodes', AP_LISTS.items.filter(function(i){ return i.item_code !== code && i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && String(i.status || 'ACTIVE').toUpperCase() === 'ACTIVE'; })
+        .map(function(i){ return i.item_code + ' — ' + i.description; })) : '') +
+      '<table class="ap-tbl"><thead><tr><th>Batch</th><th>Unit</th><th>Location</th><th>Expiry</th><th>Source</th><th>On Hand</th><th>Qty to Move</th>' + head + '<th></th></tr></thead><tbody>' +
       lots.map(function(l){
+        var mine = K === 'LOCATION' || !mu || mu.indexOf(l.stock_unit) !== -1;
         return '<tr><td>#' + l.id + '</td><td>' + esc(l.stock_unit || '') + '</td><td><b>' + esc(l.location || '—') + '</b></td><td>' + esc(l.expiry_date || 'no expiry') + '</td><td>' + esc(l.source_ref || l.source_type) + '</td><td>' + l.qty_on_hand + '</td>' +
-          '<td><input type="number" min="1" max="' + l.qty_on_hand + '" id="apXfQ' + l.id + '" value="' + l.qty_on_hand + '"/></td>' +
-          '<td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(locs.filter(function(x){ return x !== l.location; })) + '</select></td>' +
-          '<td><button class="ap-btn sm" onclick="apXferDo(' + l.id + ')">Transfer</button></td></tr>';
-      }).join('') + '</tbody></table><p class="ap-hint" style="margin-top:8px">Moving part of a batch splits it into two batches with the same expiry and source. Stock totals and the stock card do not change.</p>';
+          (mine ? '<td><input type="number" min="1" max="' + l.qty_on_hand + '" id="apXfQ' + l.id + '" value="' + l.qty_on_hand + '"/></td>' + target(l) +
+            '<td><button class="ap-btn sm" onclick="apXferDo(' + l.id + ')">Transfer</button></td>'
+           : '<td colspan="' + (K === 'LOCATION' ? 3 : 4) + '" style="color:#999">not your unit</td>') + '</tr>';
+      }).join('') + '</tbody></table><p class="ap-hint" style="margin-top:8px">' + hint + '</p>';
     apLock();
   } catch(e){ apMsg('err', esc(errText(e))); }
 }
 function apXferDo(lotId){
-  var to = apVal('apXfTo' + lotId), q = apVal('apXfQ' + lotId);
-  if (!to){ apMsg('err', 'Pick the location to move to.'); return; }
-  return apRpc('apv_transfer', { p: { lot_id: lotId, qty: q, to_location: to, date: apVal('apXfDate'), remarks: apVal('apXfRem') } },
-    function(){ return 'Moved ' + esc(q) + ' to ' + esc(to) + '.'; }, function(){ apXferLog(); return apXferOpen(AP_CUR.code); });
+  var K = AP_XF_KIND, to = apVal('apXfTo' + lotId), q = apVal('apXfQ' + lotId);
+  if (K === 'LOCATION'){
+    if (!to){ apMsg('err', 'Pick the location to move to.'); return; }
+    return apRpc('apv_transfer', { p: { lot_id: lotId, qty: q, to_location: to, date: apVal('apXfDate'), remarks: apVal('apXfRem') } },
+      function(){ return 'Moved ' + esc(q) + ' to ' + esc(to) + '.'; }, function(){ apXferLog(); return apXferOpen(AP_CUR.code); });
+  }
+  if (!to){ apMsg('err', K === 'UNIT' ? 'Pick the unit to transfer to.' : 'Type the item code to transfer to.'); return; }
+  var tc = K === 'CODE' ? to.split(' — ')[0].trim().toUpperCase() : '';
+  var lot = AP_CUR.lots.filter(function(l){ return l.id === lotId; })[0] || {};
+  if (!confirm('Transfer ' + q + ' of ' + AP_CUR.code + ' (' + (lot.stock_unit || '') + ')\nto ' + (K === 'UNIT' ? 'unit ' + to : 'item code ' + tc) + '?\n\nIt goes OUT of the old stock card and IN to the new one.')) return;
+  return apRpc('apv_transfer_stock', { p: { lot_id: lotId, qty: q, kind: K, to_unit: K === 'UNIT' ? to : '', to_code: tc,
+      to_location: apVal('apXfLoc' + lotId), date: apVal('apXfDate'), remarks: apVal('apXfRem') } },
+    function(d){ return (d && d.trf_no ? esc(d.trf_no) + ' — ' : '') + 'transferred ' + esc(q) + ' to ' + esc(K === 'UNIT' ? to : tc) + '.'; },
+    function(){ apXferLog(); return apXferOpen(AP_CUR.code); });
 }
 async function apXferLog(){
   try {
@@ -5706,8 +5735,10 @@ async function apXferLog(){
     if (r.error) throw r.error;
     var el = document.getElementById('apXferLog'); if (!el) return;
     el.innerHTML = '<div class="ap-h">Recent transfers</div>' + (!(r.data || []).length ? '<div class="ap-empty">No transfers yet.</div>' :
-      '<table class="ap-tbl ap-log"><thead><tr><th>Date</th><th>Item</th><th>From</th><th>To</th><th>Qty</th><th>By</th><th>Remarks</th></tr></thead><tbody>' +
-      r.data.map(function(t){ return '<tr><td>' + esc(t.transfer_date) + '</td><td>' + esc(t.item_code) + '</td><td>' + esc(t.from_location || '') + '</td><td>' + esc(t.to_location) + '</td><td>' + t.qty + '</td><td>' + esc(t.done_by || '') + '</td><td>' + esc(t.remarks || '') + '</td></tr>'; }).join('') + '</tbody></table>');
+      '<table class="ap-tbl ap-log"><thead><tr><th>Date</th><th>TRF #</th><th>Type</th><th>Item</th><th>From</th><th>To</th><th>Qty</th><th>By</th><th>Remarks</th></tr></thead><tbody>' +
+      r.data.map(function(t){
+        var k = t.kind || 'LOCATION', from = k === 'UNIT' ? t.from_unit : k === 'CODE' ? t.item_code : t.from_location, to = k === 'UNIT' ? t.to_unit : k === 'CODE' ? t.to_code : t.to_location;
+        return '<tr><td>' + esc(t.transfer_date) + '</td><td>' + esc(t.trf_no || '') + '</td><td>' + esc(k) + '</td><td>' + esc(t.item_code) + '</td><td>' + esc(from || '') + '</td><td>' + esc(to || '') + '</td><td>' + t.qty + '</td><td>' + esc(t.done_by || '') + '</td><td>' + esc(t.remarks || '') + '</td></tr>'; }).join('') + '</tbody></table>');
   } catch(e){}
 }
 
@@ -5871,7 +5902,7 @@ async function rpInit(){
 function rpSwitch(t){
   RP_TAB = t; RP_CUR = null; rpMsg('');
   document.querySelectorAll('#rpTabs .subtab-btn').forEach(function(b){ b.classList.toggle('active', b.id === 'rpTab_' + t); });
-  var f = '', today = ymd(new Date()), cats = ['SUPPLIES UNIT','DRUGS AND MEDS','GASES','EQUIPMENT','HARDWARE','CATERING'];
+  var f = '', today = ymd(new Date()), cats = ['SUPPLIES UNIT','DRUGS AND MEDS','GASES','NSCM','EQUIPMENT','HARDWARE','CATERING'];
   var itemCats = []; (AP_LISTS ? AP_LISTS.items : []).forEach(function(i){ if (i.category && itemCats.indexOf(i.category) === -1) itemCats.push(i.category); }); itemCats.sort();
   if (t === 'summary') f = rpSUField();
   if (t === 'card') f = rpSUField() + '<div class="ap-f"><label>Search by</label><select id="rpMode" onchange="rpCardList()"><option value="item">Item Code</option><option value="po">PO Number</option><option value="end_user">End User</option></select></div>' +
