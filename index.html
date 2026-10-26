@@ -2916,6 +2916,7 @@ function rcFormIarData(){
     project: RC_PO_PROJ[RC_PO] || '',
     resp: document.getElementById('rcResp').value || (RC_CAT === 'CATERING' && allLines[0] && allLines[0].noa_number ? 'PR# ' + allLines[0].noa_number : ''),
     dateRec: document.getElementById('rcDate').value, loc: rcLocFromDisplay(document.getElementById('rcLoc_in').value),
+    reqOff: document.getElementById('rcReqOff').value.trim() || sopUniq(RC_ROWS.filter(function(r){ return r.locked && r.qty > 0; }).map(function(r){ return r.endUser; })).join(', ') || ((RC_PO_MAP[RC_PO] || {}).endUser || ''),
     items: groupIarItems(items), poComplete: complete };
 }
 
@@ -2950,11 +2951,19 @@ async function rcIarFromLog(receiveId){
     if (!rows.length){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Receipt ' + esc(receiveId) + ' was not found.</div>'; return; }
     var r0 = rows[0];
     var iar = await fetchAll(function(){ return sb.from('v_iar_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id').order('part_id'); });
-    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name').eq('po_number', r0.po_number).maybeSingle();
+    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name,end_user').eq('po_number', r0.po_number).maybeSingle();
+    // Requisitioning Office/Dept. = what was typed on the receipt, else the end user(s) of the PO items received
+    var reqOff = String(r0.req_office || '').trim();
+    if (!reqOff && r0.po_number){
+      var ids = rows.map(function(x){ return x.po_line_id; }).filter(function(x){ return x != null; });
+      try { var eu = ids.length ? await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,end_user').in('po_line_id', ids).order('po_line_id'); }) : [];
+        reqOff = sopUniq(eu.map(function(x){ return x.end_user; })).join(', '); } catch(e){}
+      if (!reqOff && po.data) reqOff = po.data.end_user || '';
+    }
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
       project: po.data ? po.data.project_name || '' : '',
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
-      dateRec: r0.date, loc: r0.location, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
+      dateRec: r0.date, loc: r0.location, reqOff: reqOff, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
       items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
   } catch(e){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.</div>'; }
 }
@@ -3417,7 +3426,7 @@ return (
 '<div class="iar-box">'+
 '<div class="iar-box-row"><div class="l">Supplier : '+ul(o.supplier)+'</div><div class="r">IAR No. : '+ul(o.iarNo || (o.preview ? '(given on Save)' : ''))+'</div></div>'+
 '<div class="iar-box-row"><div class="l">PO No./Date : '+ul(poDisp)+'</div><div class="r">Date : '+ul(o.dateRec)+'</div></div>'+
-'<div class="iar-box-row"><div class="l">Requisitioning Office/Dept. : '+ul(o.loc)+'</div><div class="r">Invoice No. : '+ul(o.invNo)+'</div></div>'+
+'<div class="iar-box-row"><div class="l">Requisitioning Office/Dept. : '+ul(o.reqOff||'')+'</div><div class="r">Invoice No. : '+ul(o.invNo)+'</div></div>'+
 '<div class="iar-box-row"><div class="l">Responsibility Center Code : '+ul(o.resp)+'</div><div class="r">Date : '+ul(o.invDate)+'</div></div>'+
 '</div>'+
 '<table class="iar-tbl"><colgroup><col style="width:14%"><col><col style="width:10%"><col style="width:12%"></colgroup>'+
