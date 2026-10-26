@@ -830,6 +830,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <input type="date" id="expFrom" title="Export from"/>
       <span style="color:#888;font-size:.8rem">to</span>
       <input type="date" id="expTo" title="Export to"/>
+      <select id="expUnit" title="Pick list of this unit only" style="padding:6px 8px;border:1px solid #d0d7e2;border-radius:7px;font-size:.8rem"></select>
       <button class="btn btn-export" onclick="exportXlsx()">⬇️ Export (CSV)</button>
     </div>
   </div>
@@ -1712,6 +1713,8 @@ function showApp(){
   var today = new Date();
   TODAY_STR = ymd(today);
   document.getElementById('expFrom').value = TODAY_STR;
+  (function(){ var el = document.getElementById('expUnit'); if (!el) return;   // pick list: one unit per file
+    var us = myUnits() || STOCK_UNITS; el.innerHTML = us.map(function(u){ return '<option>' + esc(u) + '</option>'; }).join(''); el.value = ME.unit && us.indexOf(ME.unit) !== -1 ? ME.unit : us[0]; })();
   document.getElementById('expTo').value = TODAY_STR;
   document.getElementById('issFrom').value = '';
   document.getElementById('issTo').value = '';
@@ -2057,11 +2060,12 @@ async function exportXlsx(){
   var toDate = document.getElementById('expTo').value || fromDate;
   if (!fromDate){ showMsg('err','Select a From date for the export.'); return; }
   if (toDate < fromDate){ showMsg('err','The To date must be on or after the From date.'); return; }
+  var expUnit = (document.getElementById('expUnit') || {}).value || '';
   showMsg('ok','Generating file…');
   try {
     var pending = await fetchAll(function(){
       var q = sb.from('v_ris_lines').select('*').eq('status','Pending');
-      if (ME.unit) q = q.eq('ris_unit', ME.unit);
+      if (expUnit) q = q.eq('ris_unit', expUnit); else if (ME.unit) q = q.eq('ris_unit', ME.unit);
       return q.order('date').order('id');
     });
     var codes = Array.from(new Set(pending.map(function(p){ return p.item_code; })));
@@ -2086,13 +2090,13 @@ async function exportXlsx(){
       out.push([toMDY(p.date), p.ris_no, p.ris_unit || '', p.end_user, p.item_code, p.description, p.unit, p.qty_requested,
                 running[k], lot ? (lot.location || '') : '', lot ? (lot.location_incharge || '') : '', p.remarks || '']);
     });
-    if (!out.length){ showMsg('err', 'No requests found between ' + fromDate + ' and ' + toDate + '.'); return; }
+    if (!out.length){ showMsg('err', 'No ' + (expUnit ? expUnit + ' ' : '') + 'requests found between ' + fromDate + ' and ' + toDate + '.'); return; }
     var header = ['DATE','RIS NO','STOCK UNIT','END USER','CODE','ITEM DESCRIPTION','UNIT','QTY','RUNNING BALANCE','LOCATION','ASSIGN','REMARKS'];
     var csv = '\ufeff' + [header].concat(out).map(function(r){ return r.map(csvCell_).join(','); }).join('\r\n');
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'PickList_' + (fromDate === toDate ? fromDate : fromDate + '_to_' + toDate) + '.csv';
+    a.download = 'PickList_' + (expUnit ? expUnit.replace(/\s+/g, '_') + '_' : '') + (fromDate === toDate ? fromDate : fromDate + '_to_' + toDate) + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     showMsg('ok', 'File downloaded — open it in Excel to sort/filter.');
   } catch(e){
