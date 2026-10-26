@@ -2917,7 +2917,7 @@ function rcFormIarData(){
     resp: document.getElementById('rcResp').value || (RC_CAT === 'CATERING' && allLines[0] && allLines[0].noa_number ? 'PR# ' + allLines[0].noa_number : ''),
     dateRec: document.getElementById('rcDate').value, loc: rcLocFromDisplay(document.getElementById('rcLoc_in').value),
     reqOff: document.getElementById('rcReqOff').value.trim() || sopUniq(RC_ROWS.filter(function(r){ return r.locked && r.qty > 0; }).map(function(r){ return r.endUser; })).join(', ') || ((RC_PO_MAP[RC_PO] || {}).endUser || ''),
-    items: groupIarItems(items), poComplete: complete };
+    items: groupIarItems(items), poComplete: complete, unit: RC_CAT };
 }
 
 function rcPreviewIar(){
@@ -2926,12 +2926,13 @@ function rcPreviewIar(){
 }
 function rcShowIar(d){
   RC_LAST_IAR = d;
-  document.getElementById('rcIarContent').innerHTML = renderIarTemplate(d);
+  document.getElementById('rcIarContent').innerHTML = (d.unit === 'NSCM' ? '<div style="background:#fff3a6;border:2px solid #e0c200;color:#6b5600;font-weight:800;text-align:center;padding:10px;border-radius:8px;margin-bottom:10px">🟨 NSCM — PLEASE PRINT ON YELLOW BOND PAPER</div>' : '') + renderIarTemplate(d);
   document.getElementById('rcMoIar').classList.add('show');
   var md = document.querySelector('#rcMoIar .md'); if (md) md.scrollTop = 0;
 }
 function rcPrintIar(){
   if (!RC_LAST_IAR){ alert('The IAR is still loading — wait a moment, then click Print again.'); return; }
+  if (RC_LAST_IAR.unit === 'NSCM' && !confirm('🟨 PLEASE PRINT ON YELLOW BOND PAPER\n\nThis is an NSCM IAR. Load yellow bond paper in the printer, then click OK.')) return;
   var fr = document.getElementById('iarPrintFrame');
   if (!fr){ fr = document.createElement('iframe'); fr.id = 'iarPrintFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(fr); }
   var doc = fr.contentWindow.document;
@@ -2963,7 +2964,7 @@ async function rcIarFromLog(receiveId){
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
       project: po.data ? po.data.project_name || '' : '',
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
-      dateRec: r0.date, loc: r0.location, reqOff: reqOff, poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
+      dateRec: r0.date, loc: r0.location, reqOff: reqOff, unit: r0.category || (po.data ? po.data.category : ''), poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
       items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
   } catch(e){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.</div>'; }
 }
@@ -5395,13 +5396,25 @@ async function apPoFreeSave(id){
   await apPoOpen(po);
   apMsg('ok', '✅ 🎁 Free goods added to ' + esc(r.data.receive_id) + ' — on its IAR as "— FREE GOODS", in stock at zero cost. The PO balance did not change.');
 }
+// change the unit of a PO (coded units only) — received stock moves with it if none was issued yet
+var AP_UNIT_SWAP = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM'];
+function apPoUnit(sel){
+  var h = AP_CUR.h, to = sel.value;
+  if (!confirm('Change PO ' + h.po_number + ' from ' + h.category + ' to ' + to + '?\n\nIts items (and any stock already received from it) will belong to ' + to + '.')){ sel.value = h.category; return; }
+  return apRpc('apv_po_change_unit', { p_po: h.po_number, p_unit: to },
+    function(d){ return 'PO ' + esc(h.po_number) + ' is now ' + esc(to) + (d.receipts ? ' — ' + d.receipts + ' receipt(s) and ' + d.batches + ' batch(es) moved too.' : '.'); },
+    function(){ return apPoOpen(h.po_number); }).then(function(){ if (AP_CUR && AP_CUR.h && AP_CUR.h.category !== to) sel.value = AP_CUR.h.category; });
+}
 function apPoRender(){
   var c = AP_CUR, h = c.h, coded = AP_UNITS_CODED.indexOf(h.category) !== -1 || h.category === 'EQUIPMENT' || h.category === 'HARDWARE';
   var hasDel = c.lines.some(function(l){ return apNum(l.qty_delivered) > 0; }), wasIO = isInOut(h.txn_type);
   var html = apDl('apSupDl', AP_LISTS.sup.map(function(s){ return s.supplier_name; })) + apDl('apEuDl', AP_LISTS.eu.map(function(e){ return e.end_user_name; })) +
     apDl('apItemDl', AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && (!coded || unitItemOk(h.category, i.category)); })
       .map(function(i){ return i.item_code + ' — ' + i.description; })) +
-    '<div class="ap-h">PO ' + esc(h.po_number) + ' <span class="ap-tag">' + esc(h.category) + '</span> <span class="ap-tag ' + (h.overall_status === 'COMPLETE' ? 'ok' : 'warn') + '">' + esc(h.overall_status) + '</span></div>' +
+    '<div class="ap-h">PO ' + esc(h.po_number) + ' ' + (AP_UNIT_SWAP.indexOf(h.category) !== -1 && (ME.role === 'Approver' || ME.role === 'Admin')
+      ? '<select class="ap-tag" title="Change the unit of this PO" style="border:1px solid #c9d6e6;font-weight:700;cursor:pointer" onchange="apPoUnit(this)">' +
+          AP_UNIT_SWAP.map(function(u){ return '<option' + (u === h.category ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>'
+      : '<span class="ap-tag">' + esc(h.category) + '</span>') + ' <span class="ap-tag ' + (h.overall_status === 'COMPLETE' ? 'ok' : 'warn') + '">' + esc(h.overall_status) + '</span></div>' +
     '<div class="ap-grid">' +
       apField('PO Number (rename)', 'apPoNo', h.po_number) + apField('Supplier', 'apPoSup', h.supplier, { list: 'apSupDl' }) +
       apField('PO Date', 'apPoDate', h.po_date, { type: 'date' }) +
