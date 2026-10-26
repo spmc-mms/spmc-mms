@@ -3511,7 +3511,17 @@ var PO_CATEGORIES = ['SUPPLIES UNIT','DRUGS AND MEDS','GASES','NSCM','EQUIPMENT'
 var STOCK_UNITS = PO_CATEGORIES.filter(function(c){ return c !== 'CATERING'; });
 var PO_CODED = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES','NSCM'];
 // which items a unit picks from: EQUIPMENT / HARDWARE / NSCM use only their own item codes; the others use every code except NSCM's
-function unitItemOk(cat, c){ c = String(c || '').toUpperCase(); return (cat === 'EQUIPMENT' || cat === 'HARDWARE' || cat === 'NSCM') ? c === cat : c !== 'NSCM'; }
+// NSCM also uses codes shared with other units — those are listed in unit_item_codes (unit NSCM)
+var UNIT_ITEMS = {};
+async function loadUnitItems_(){
+  try { var r = await fetchAll(function(){ return sb.from('unit_item_codes').select('unit,item_code').eq('unit', 'NSCM').order('item_code'); });
+    UNIT_ITEMS = {}; r.forEach(function(x){ UNIT_ITEMS[x.unit + '|' + x.item_code] = 1; }); } catch(e){}
+}
+function unitItemOk(cat, c, code){
+  c = String(c || '').toUpperCase();
+  if (cat === 'NSCM') return c === 'NSCM' || !!UNIT_ITEMS['NSCM|' + code];
+  return (cat === 'EQUIPMENT' || cat === 'HARDWARE') ? c === cat : c !== 'NSCM';
+}
 var PO_FUNDS = ['Regular Agency Fund (01)','Internal Generated Fund (5)','Trust Fund (07)'];
 var PO_MODES = ['Public Bidding','Agency to Agency','Direct Contracting','Negotiated Procurement','Small Value Procurement','Emergency Purchase',
   'Public Bidding 1st','Public Bidding 1st Full','Public Bidding 2nd','Public Bidding 2nd Full',
@@ -3566,6 +3576,7 @@ async function poInit(){
       var e = await fetchAll(function(){ return sb.from('end_users').select('end_user_name').eq('status','Active').order('end_user_name'); });
       PO_EUS = e.map(function(x){ return x.end_user_name; });
       PO_ITEMS = await fetchAll(function(){ return sb.from('items').select('item_code,description,unit,category').eq('status','ACTIVE').order('item_code'); });
+      await loadUnitItems_();
     } catch(err){ poMsg('Error loading form data: ' + errText(err), 'err'); }
     setLoading(false);
     poCategoryChange();
@@ -3659,7 +3670,7 @@ function poCategoryChange(){
   document.getElementById('poCateringNote').style.display = cat === 'CATERING' ? '' : 'none';
   // Coded units pick from the real item list (no AUTO- codes); typed-in units get
   // suggestions from descriptions already used in that same unit.
-  PO_ITEM_KEYS = PO_ITEMS.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && unitItemOk(cat, i.category); })
+  PO_ITEM_KEYS = PO_ITEMS.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && unitItemOk(cat, i.category, i.item_code); })
     .map(function(i){ return i.item_code + ' — ' + i.description; });
   PO_FREE_DESCS = {};
   PO_ITEMS.forEach(function(i){ if (String(i.category || '').toUpperCase() === cat && i.item_code.indexOf('AUTO-') === 0) PO_FREE_DESCS[i.description] = i.unit || ''; });
@@ -3823,7 +3834,7 @@ function poBulkItems(){
     var desc = col(r, 'desc'), code = col(r, 'code').toUpperCase().replace(/\s+/g, ''), m;
     if (!code && (m = desc.match(/\(([A-Z]{1,3}\d{2,6}[A-Z]{0,3})\)\s*$/i))) code = m[1].toUpperCase();
     var it = code && coded ? PO_ITEMS.filter(function(x){ return x.item_code.toUpperCase() === code && x.item_code.indexOf('AUTO-') !== 0 &&
-      unitItemOk(cat, x.category); })[0] : null;
+      unitItemOk(cat, x.category, x.item_code); })[0] : null;
     var cost = poBulkNum(col(r, 'cost'));
     return { cat: cat, item_code: it ? it.item_code : '', description: desc || (it ? it.description : ''), unit: col(r, 'unit') || (it ? it.unit || '' : ''),
              qty: poBulkNum(col(r, 'qty')) || 0, unit_cost: cost === null ? NaN : cost, assignedDesc: it ? it.description : '', codeTyped: code && !it ? code : '' };
@@ -5141,7 +5152,12 @@ function apBegVirtual(){
   }).map(function(i){
     return { id: 'v:' + i.item_code, virtual: true, stock_unit: apBegUnitOf(i), item_code: i.item_code, description: i.description, uom: i.unit,
              expiry_date: null, location: null, source_ref: '', qty_in: 0, qty_on_hand: 0, qty_adjusted: 0, manual_ris: false };
-  });
+  }).concat(units.indexOf('NSCM') === -1 ? [] : ((AP_LISTS && AP_LISTS.items) || []).filter(function(i){   // NSCM codes shared with other units
+    return UNIT_ITEMS['NSCM|' + i.item_code] && apBegUnitOf(i) !== 'NSCM' && !have[i.item_code + '|NSCM'] && String(i.status || '').toUpperCase() !== 'INACTIVE';
+  }).map(function(i){
+    return { id: 'v:NSCM:' + i.item_code, virtual: true, stock_unit: 'NSCM', item_code: i.item_code, description: i.description, uom: i.unit,
+             expiry_date: null, location: null, source_ref: '', qty_in: 0, qty_on_hand: 0, qty_adjusted: 0, manual_ris: false };
+  }));
 }
 function apBegAll(){ return BEG_ROWS.concat(apBegVirtual()); }
 function apBegAddFor(code, unit){
@@ -5312,6 +5328,7 @@ async function apLoadLists(force){
     fetchAll(function(){ return sb.from('items').select('item_code,description,unit,category,reorder_level,status').order('item_code'); })
   ]);
   AP_LISTS = { sup: res[0], eu: res[1], loc: res[2], items: res[3] };
+  await loadUnitItems_();
 }
 
 function apSwitch(t){
@@ -5409,7 +5426,7 @@ function apPoRender(){
   var c = AP_CUR, h = c.h, coded = AP_UNITS_CODED.indexOf(h.category) !== -1 || h.category === 'EQUIPMENT' || h.category === 'HARDWARE';
   var hasDel = c.lines.some(function(l){ return apNum(l.qty_delivered) > 0; }), wasIO = isInOut(h.txn_type);
   var html = apDl('apSupDl', AP_LISTS.sup.map(function(s){ return s.supplier_name; })) + apDl('apEuDl', AP_LISTS.eu.map(function(e){ return e.end_user_name; })) +
-    apDl('apItemDl', AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && (!coded || unitItemOk(h.category, i.category)); })
+    apDl('apItemDl', AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0 && (!coded || unitItemOk(h.category, i.category, i.item_code)); })
       .map(function(i){ return i.item_code + ' — ' + i.description; })) +
     '<div class="ap-h">PO ' + esc(h.po_number) + ' ' + (AP_UNIT_SWAP.indexOf(h.category) !== -1 && (ME.role === 'Approver' || ME.role === 'Admin')
       ? '<select class="ap-tag" title="Change the unit of this PO" style="border:1px solid #c9d6e6;font-weight:700;cursor:pointer" onchange="apPoUnit(this)">' +
