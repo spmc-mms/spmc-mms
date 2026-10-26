@@ -3105,12 +3105,15 @@ function drTot(id){ return DRF.cols.reduce(function(a, c){ return a + (Number(c.
 function drSetQ(i, id, v){ var n = parseFloat(v); if (n > 0) DRF.cols[i].q[id] = n; else delete DRF.cols[i].q[id];
   var t = document.getElementById('drT' + id); if (t){ var tt = drTot(id); t.textContent = tt ? tt : ''; t.style.color = DRF.mode === 'edit' && tt && tt !== DRF.lines.filter(function(l){ return l.id === id; })[0].rcv ? '#c0392b' : ''; } }
 function drRender(){
-  var E = DRF, edit = E.mode === 'edit', inp = 'style="width:100%;padding:4px 6px;border:1px solid #cfd8e3;border-radius:5px;font-size:.8rem"';
+  var E = DRF, edit = E.mode === 'edit', inp = 'style="display:block;width:100%;box-sizing:border-box;margin:0;padding:4px 6px;border:1px solid #cfd8e3;border-radius:5px;font-size:.8rem"';
   var h = '<div style="overflow:auto"><table class="ap-tbl" style="font-size:.82rem;min-width:100%"><thead><tr><th>Code</th><th style="text-align:right">Qty Ordered</th><th style="text-align:right">' + (edit ? 'Received (this IAR)' : 'Balance') + '</th>' +
-    E.cols.map(function(c, i){ return '<th style="min-width:130px;background:#fff8e6">DR ' + (i + 1) + ' <a href="#" title="remove this DR" style="float:right;color:#c0392b" onclick="event.preventDefault();drDelCol(' + i + ')">✕</a>' +
+    E.cols.map(function(c, i){ return '<th style="min-width:150px;background:#fff8e6;vertical-align:top;text-align:left">' +
+      '<div style="display:flex;align-items:center;margin-bottom:4px"><span>DR ' + (i + 1) + '</span><span style="flex:1"></span><a href="#" title="remove this DR" style="color:#c0392b;text-decoration:none" onclick="event.preventDefault();drDelCol(' + i + ')">✕</a></div>' +
+      '<div style="font-size:.68rem;color:#777;font-weight:600">DR No.</div>' +
       '<input type="text" placeholder="DR No." value="' + esc(c.no) + '" ' + inp + ' oninput="DRF.cols[' + i + '].no=this.value"/>' +
+      '<div style="font-size:.68rem;color:#777;font-weight:600;margin-top:4px">Delivery Date</div>' +
       '<input type="date" value="' + esc(c.date) + '" ' + inp + ' oninput="DRF.cols[' + i + '].date=this.value" title="actual delivery date"/></th>'; }).join('') +
-    '<th style="text-align:right">Total</th></tr></thead><tbody>' +
+    '<th style="text-align:right;vertical-align:bottom">Total</th></tr></thead><tbody>' +
     E.lines.map(function(l){ var t = drTot(l.id);
       return '<tr><td title="' + esc(l.desc || '') + '"><b>' + esc(l.code) + '</b></td><td style="text-align:right">' + (l.ordered == null ? '' : l.ordered) + '</td><td style="text-align:right">' + (edit ? l.rcv : (l.bal == null ? '' : l.bal)) + '</td>' +
         E.cols.map(function(c, i){ return '<td style="background:#fffdf5"><input type="number" min="0" step="any" value="' + (c.q[l.id] || '') + '" ' + inp + ' oninput="drSetQ(' + i + ',' + l.id + ',this.value)"/></td>'; }).join('') +
