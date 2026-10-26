@@ -1153,6 +1153,10 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
         </div>
         <div class="rc-adv-btns"><button type="button" class="btn btn-addc" onclick="rcAdvAdd()">+ Add to Cart</button><button type="button" class="btn btn-clr" onclick="rcAdvClear()">Clear</button></div>
       </div>
+      <div id="rcDrBar" style="display:none;margin:0 0 10px;padding:8px 10px;background:#fff8e6;border:1px solid #f0dca8;border-radius:10px;font-size:.84rem;gap:10px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn btn-out btn-sm" onclick="rcDrOpen()">📑 DR / Delivery Dates</button>
+        <span id="rcDrSum"></span>
+      </div>
       <div class="tbl-wrap">
         <table class="tbl">
           <thead><tr>
@@ -2491,7 +2495,7 @@ async function rcSaveDraft(){
   var rows = RC_ROWS.map(function(r){ var x = Object.assign({}, r); delete x.key; return x; });
   var btn = document.getElementById('rcDraftBtn'); btn.disabled = true; btn.textContent = 'Saving…';
   var r = await sb.rpc('save_receive_draft', { p: { id: RC_DRAFT_ID || '', kind: RC_IS_ADV ? 'ADVANCE' : 'PO', category: RC_CAT, po_number: RC_PO || '',
-    supplier: document.getElementById('rcSup_in').value.trim(), payload: { hdr: hdr, rows: rows, po: RC_PO, adv: RC_IS_ADV } } });
+    supplier: document.getElementById('rcSup_in').value.trim(), payload: { hdr: hdr, rows: rows, po: RC_PO, adv: RC_IS_ADV, dr: RC_DR } } });
   btn.disabled = false; btn.textContent = '📝 Save Draft';
   if (r.error){ rcAlert('error', esc(errText(r.error)) + (/receive_draft/.test(errText(r.error)) ? ' — has update 52 been run?' : '')); return; }
   RC_DRAFT_ID = r.data.id;
@@ -2522,7 +2526,7 @@ async function rcOpenDraft(id){
     RC_ROWS = (pl.rows || []).map(function(x){ return Object.assign({}, x, { key: ++RC_ROW_SEQ }); });
   }
   RC_HDR_IDS.forEach(function(k){ if (hdr[k] != null && (k !== 'rcFund' || pl.adv)) document.getElementById(k).value = hdr[k]; });
-  RC_DRAFT_ID = d.id;
+  RC_DRAFT_ID = d.id; RC_DR = pl.dr || null;
   rcRenderRows();
   document.getElementById('rcDraftList').style.display = 'none';
   rcAlert('ok', '📂 Draft opened' + (pl.po ? ' — PO <b>' + esc(pl.po) + '</b>' : '') + ' (saved ' + esc(String(d.saved_at || '').replace('T', ' ').slice(0, 16)) + ' by ' + esc(d.saved_by || '') + '). Check it, then 💾 Save — or 📝 Save Draft again.' +
@@ -2634,7 +2638,7 @@ function rcSelectPo(poNo){
   rcLoadProj_(poNo);
   var po = RC_PO_MAP[poNo];
   RC_PO = po ? poNo : null;
-  RC_ROWS = [];
+  RC_ROWS = []; RC_DR = null;
   if (!po){ rcRenderRows(); return; }
   if (!(po.units || {})[RC_CAT] && po.category && po.category !== RC_CAT){ RC_CAT = po.category; document.getElementById('rcCat').value = RC_CAT; rcBuildFreeList(); }
   document.getElementById('rcSup_in').value = po.supplier || '';
@@ -2738,6 +2742,7 @@ function rcRemCell_(r){
 }
 function rcShowBatch_(){ return RC_CAT === 'DRUGS AND MEDS' || RC_CAT === 'FLUIDS'; }
 function rcRenderRows(){
+  rcDrSummary();
   var tb = document.getElementById('rcBody');
   if (!RC_ROWS.length){
     tb.innerHTML = '<tr class="empty-row"><td colspan="13">' + (RC_IS_ADV ? 'No items in the cart yet — use “Add Item to Cart” above.' : 'Select a PO to load its items.') + '</td></tr>';
@@ -2985,13 +2990,26 @@ function rcSave(){
     items.push(itm);
   }
   if (!items.length && !cancels.length){ rcAlert('error', 'Enter a Qty Received on at least one item' + (RC_IS_ADV ? '.' : ', or tick “Cancel Bal.” to close out a line.')); return; }
+  // DR / Delivery Dates: the DR qty of each item must add up to its Qty Received
+  var deliveries = [];
+  if (!RC_IS_ADV && RC_DR && RC_DR.length && items.length){
+    var drT = {};
+    RC_DR.forEach(function(c){ Object.keys(c.q).forEach(function(k){ if (c.q[k] > 0){ drT[k] = (drT[k] || 0) + c.q[k]; deliveries.push({ po_line_id: Number(k), dr_no: String(c.no || '').trim(), dr_date: c.date, qty: c.q[k] }); } }); });
+    var keys = sopUniq(Object.keys(drT).concat(Object.keys(perLine)));
+    for (var j = 0; j < keys.length; j++){
+      if ((drT[keys[j]] || 0) !== (perLine[keys[j]] || 0)){
+        var rr = RC_ROWS.filter(function(x){ return String(x.poLineId) === keys[j]; })[0] || {};
+        rcAlert('error', esc(rr.itemCode || rr.desc || 'An item') + ': the qty in 📑 DR / Delivery Dates (' + (drT[keys[j]] || 0) + ') must be the same as its Qty Received (' + (perLine[keys[j]] || 0) + ').'); return;
+      }
+    }
+  } else if (!RC_IS_ADV && items.length && !confirm('No DR / Delivery Date was typed — the SOP will use the Date Received (' + toMDY(date) + ') as the delivery date.\n\nSave anyway?')) return;
 
   var payload = {
     receipt_type: RC_IS_ADV ? 'ADVANCE' : 'PO', category: RC_CAT, date_received: date, supplier: supplier, po_number: RC_IS_ADV ? '' : RC_PO,
     invoice_no: document.getElementById('rcInvNo').value.trim(), invoice_date: document.getElementById('rcInvDate').value,
     fund_cluster: document.getElementById('rcFund').value.trim(), location: loc,
     req_office: document.getElementById('rcReqOff').value.trim(), resp_code: document.getElementById('rcResp').value.trim(),
-    items: items, cancel_po_line_ids: cancels
+    items: items, cancel_po_line_ids: cancels, deliveries: deliveries
   };
   var iar = (!RC_IS_ADV && items.length) ? rcFormIarData() : null;
 
@@ -3033,9 +3051,9 @@ function rcConfirmCancelThenSave(payload, iar, cancels){
 async function rcDoSave(payload, iar){
   var btn = document.getElementById('rcSaveBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
-  var res = await sb.rpc('save_receipt', { p: payload });
+  var res = await sb.rpc(payload.deliveries && payload.deliveries.length ? 'save_receipt_dr' : 'save_receipt', { p: payload });
   btn.disabled = false; btn.textContent = '💾 Save';
-  if (res.error){ rcAlert('error', esc(errText(res.error))); return; }
+  if (res.error){ rcAlert('error', esc(errText(res.error)) + (/save_receipt_dr/.test(errText(res.error)) ? ' — has update 58 been run?' : '')); return; }
   var d = res.data, parts = [];
   if (d.receive_id){
     try { var iq = await sb.from('receipts').select('iar_no').eq('receive_id', d.receive_id).maybeSingle(); d.iar_no = iq.data ? iq.data.iar_no : null; } catch(e){}
@@ -3062,10 +3080,111 @@ function rcResetForm(keepAlert){
   document.getElementById('rcLoc_in').value = '';
   document.getElementById('rcDate').value = ymd(new Date());
   document.getElementById('rcPill').classList.remove('show');
-  RC_PO = null; RC_CATERING = RC_CAT === 'CATERING'; RC_ROWS = []; RC_DRAFT_ID = null;
+  RC_PO = null; RC_CATERING = RC_CAT === 'CATERING'; RC_ROWS = []; RC_DRAFT_ID = null; RC_DR = null;
   if (RC_IS_ADV) rcAdvClear();
   rcRenderRows();
   if (!keepAlert){ document.getElementById('rcOk').style.display = 'none'; document.getElementById('rcEr').style.display = 'none'; }
+}
+
+
+// ── DR / DELIVERY DATES (Receive, SOP, Approvals) ───────────────────────────
+// RC_DR = [ { no, date, q: { po_line_id: qty } } ] for the receipt being typed
+var RC_DR = null, DRF = null;
+function drOpen(cfg){ DRF = cfg; if (!DRF.cols.length) drAddCol(true); drRender(); document.getElementById('drMsg').innerHTML = '';
+  document.getElementById('drTitle').textContent = cfg.title || ''; document.getElementById('drOkBtn').textContent = cfg.mode === 'edit' ? '💾 Save DRs' : '✔ Done';
+  document.getElementById('drMo').style.display = 'flex'; }
+function drClose(){ document.getElementById('drMo').style.display = 'none'; }
+function drAddCol(fill){
+  var c = { no: '', date: '', q: {} };
+  if (fill && !DRF.cols.length) DRF.lines.forEach(function(l){ if (l.rcv > 0) c.q[l.id] = l.rcv; });   // 1st DR: the qty received so far
+  DRF.cols.push(c);
+}
+function drDelCol(i){ DRF.cols.splice(i, 1); if (!DRF.cols.length) drAddCol(); drRender(); }
+function drClearAll(){ if (!confirm('Remove every DR column?')) return; DRF.cols = []; drAddCol(); drRender(); }
+function drTot(id){ return DRF.cols.reduce(function(a, c){ return a + (Number(c.q[id]) || 0); }, 0); }
+function drSetQ(i, id, v){ var n = parseFloat(v); if (n > 0) DRF.cols[i].q[id] = n; else delete DRF.cols[i].q[id];
+  var t = document.getElementById('drT' + id); if (t){ var tt = drTot(id); t.textContent = tt ? tt : ''; t.style.color = DRF.mode === 'edit' && tt && tt !== DRF.lines.filter(function(l){ return l.id === id; })[0].rcv ? '#c0392b' : ''; } }
+function drRender(){
+  var E = DRF, edit = E.mode === 'edit', inp = 'style="width:100%;padding:4px 6px;border:1px solid #cfd8e3;border-radius:5px;font-size:.8rem"';
+  var h = '<div style="overflow:auto"><table class="ap-tbl" style="font-size:.82rem;min-width:100%"><thead><tr><th>Code</th><th style="text-align:right">Qty Ordered</th><th style="text-align:right">' + (edit ? 'Received (this IAR)' : 'Balance') + '</th>' +
+    E.cols.map(function(c, i){ return '<th style="min-width:130px;background:#fff8e6">DR ' + (i + 1) + ' <a href="#" title="remove this DR" style="float:right;color:#c0392b" onclick="event.preventDefault();drDelCol(' + i + ')">✕</a>' +
+      '<input type="text" placeholder="DR No." value="' + esc(c.no) + '" ' + inp + ' oninput="DRF.cols[' + i + '].no=this.value"/>' +
+      '<input type="date" value="' + esc(c.date) + '" ' + inp + ' oninput="DRF.cols[' + i + '].date=this.value" title="actual delivery date"/></th>'; }).join('') +
+    '<th style="text-align:right">Total</th></tr></thead><tbody>' +
+    E.lines.map(function(l){ var t = drTot(l.id);
+      return '<tr><td title="' + esc(l.desc || '') + '"><b>' + esc(l.code) + '</b></td><td style="text-align:right">' + (l.ordered == null ? '' : l.ordered) + '</td><td style="text-align:right">' + (edit ? l.rcv : (l.bal == null ? '' : l.bal)) + '</td>' +
+        E.cols.map(function(c, i){ return '<td style="background:#fffdf5"><input type="number" min="0" step="any" value="' + (c.q[l.id] || '') + '" ' + inp + ' oninput="drSetQ(' + i + ',' + l.id + ',this.value)"/></td>'; }).join('') +
+        '<td style="text-align:right;font-weight:700" id="drT' + l.id + '">' + (t || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  document.getElementById('drBody').innerHTML = h;
+}
+function drMsg(t, ok){ document.getElementById('drMsg').innerHTML = '<span style="color:' + (ok ? '#1e8449' : '#c0392b') + '">' + t + '</span>'; }
+// columns with at least one qty; checks the dates
+function drCheck(){
+  var used = DRF.cols.filter(function(c){ return Object.keys(c.q).some(function(k){ return c.q[k] > 0; }); }), today = ymd(new Date());
+  for (var i = 0; i < used.length; i++){
+    if (!used[i].date) return { err: 'Type the Delivery Date of ' + (used[i].no ? 'DR ' + esc(used[i].no) : 'DR ' + (DRF.cols.indexOf(used[i]) + 1)) + '.' };
+    if (used[i].date > today) return { err: 'Delivery Date ' + esc(toMDY(used[i].date)) + ' is in the future.' };
+  }
+  return { cols: used };
+}
+function drRows(cols){ var out = []; cols.forEach(function(c){ Object.keys(c.q).forEach(function(k){ if (c.q[k] > 0) out.push({ po_line_id: Number(k), dr_no: String(c.no || '').trim(), dr_date: c.date, qty: c.q[k] }); }); }); return out; }
+async function drDone(){
+  var ck = drCheck(); if (ck.err){ drMsg(ck.err); return; }
+  if (DRF.mode === 'edit'){
+    var bad = DRF.lines.filter(function(l){ var t = drTot(l.id); return ck.cols.length && t !== l.rcv; })[0];
+    if (bad){ drMsg(esc(bad.code) + ': the DR qty (' + drTot(bad.id) + ') must add up to the qty received (' + bad.rcv + ').'); return; }
+    var r = await sb.rpc('save_receipt_deliveries', { p_receive_id: DRF.receiveId, p_rows: drRows(ck.cols) });
+    if (r.error){ drMsg(esc(errText(r.error)) + (/save_receipt_deliveries/.test(errText(r.error)) ? ' — has update 58 been run?' : '')); return; }
+    drClose(); if (DRF.onSave) await DRF.onSave();
+    return;
+  }
+  // Receive: the DR totals become the Qty Received (items with one row)
+  var over = DRF.lines.filter(function(l){ return drTot(l.id) > (l.bal || 0); })[0];
+  if (over){ drMsg(esc(over.code) + ': the DR qty (' + drTot(over.id) + ') is more than the PO balance (' + over.bal + ').'); return; }
+  RC_DR = ck.cols.length ? ck.cols : null;
+  DRF.lines.forEach(function(l){
+    var rows = RC_ROWS.filter(function(r){ return r.locked && !r.free && r.poLineId === l.id; }), t = drTot(l.id);
+    if (rows.length === 1 && RC_DR) rows[0].qty = t;
+  });
+  drClose(); rcRenderRows();
+}
+function rcDrLines_(){
+  return RC_ROWS.filter(function(r){ return r.locked && r.first && !r.free; }).map(function(r){
+    var rcv = RC_ROWS.filter(function(x){ return x.locked && !x.free && x.poLineId === r.poLineId; }).reduce(function(a, x){ return a + (Number(x.qty) || 0); }, 0);
+    return { id: r.poLineId, code: r.itemCode || '(no code)', desc: r.poDesc || r.desc, ordered: r.ordered, bal: r.balance, rcv: rcv };
+  });
+}
+function rcDrOpen(){
+  if (!RC_PO){ rcAlert('error', 'Pick the PO first.'); return; }
+  var cols = (RC_DR || []).map(function(c){ return { no: c.no, date: c.date, q: Object.assign({}, c.q) }; });
+  drOpen({ mode: 'rc', lines: rcDrLines_(), cols: cols, title: '— PO ' + RC_PO });
+}
+function rcDrSummary(){
+  var bar = document.getElementById('rcDrBar'); if (!bar) return;
+  bar.style.display = (!RC_IS_ADV && RC_PO) ? 'flex' : 'none';
+  document.getElementById('rcDrSum').innerHTML = RC_DR && RC_DR.length
+    ? '✅ ' + RC_DR.map(function(c){ return '<b>' + esc(c.no || 'DR') + '</b> ' + esc(toMDY(c.date)); }).join(' · ')
+    : '<span style="color:#9a6b00">⚠ Not filled — the SOP will use the Date Received as the delivery date.</span>';
+}
+// the DRs of a saved receipt (SOP / Approvals)
+async function drEditReceipt(rid, onSave){
+  try {
+    var res = await Promise.all([
+      fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,po_line_id,item_code,qty_received,po_number').eq('receive_id', rid); }),
+      fetchAll(function(){ return sb.from('receipt_deliveries').select('po_line_id,dr_no,dr_date,qty').eq('receive_id', rid).order('dr_date').order('id'); })
+    ]);
+    var rl = res[0].filter(function(l){ return l.po_line_id != null; });
+    if (!rl.length){ alert('Receipt ' + rid + ' has no PO items.'); return; }
+    var pl = await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,item_code,description,po_description,qty_ordered').eq('po_number', rl[0].po_number).order('po_line_id'); });
+    var L = {}, order = [];
+    rl.forEach(function(l){ if (!L[l.po_line_id]){ var p = pl.filter(function(x){ return x.po_line_id === l.po_line_id; })[0] || {};
+        L[l.po_line_id] = { id: l.po_line_id, code: l.item_code, desc: p.po_description || p.description || '', ordered: p.qty_ordered, rcv: 0 }; order.push(l.po_line_id); }
+      L[l.po_line_id].rcv += Number(l.qty_received) || 0; });
+    var C = {}, cols = [];
+    res[1].forEach(function(d){ var k = (d.dr_no || '') + '|' + d.dr_date; if (!C[k]){ C[k] = { no: d.dr_no || '', date: d.dr_date, q: {} }; cols.push(C[k]); }
+      C[k].q[d.po_line_id] = (C[k].q[d.po_line_id] || 0) + Number(d.qty); });
+    drOpen({ mode: 'edit', receiveId: rid, lines: order.map(function(k){ return L[k]; }), cols: cols, onSave: onSave, title: '— ' + rid + ' · PO ' + rl[0].po_number });
+  } catch(e){ alert(errText(e)); }
 }
 
 // ── TRANSACTIONS VIEW ───────────────────────────────────────────────────────
@@ -6449,12 +6568,29 @@ async function sopFetch(po){
   var codes = sopUniq(res[0].map(function(l){ return l.item_code; }));
   var it = codes.length ? await fetchAll(function(){ return sb.from('items').select('item_code,tax_type').in('item_code', codes).order('item_code'); }) : [];
   var itemTax = {}; it.forEach(function(i){ if (i.tax_type) itemTax[i.item_code] = i.tax_type; });
-  var val = {}, rq = {};
-  res[2].forEach(function(l){
-    val[l.receive_id] = (val[l.receive_id] || 0) + (Number(l.qty_received) || 0) * (Number(l.unit_cost) || 0);
-    var k = l.receive_id + '|' + l.po_line_id; rq[k] = (rq[k] || 0) + (Number(l.qty_received) || 0);
-  });
-  return { head: head, lines: res[0], receipts: res[1].filter(function(r){ return r.receipt_type === 'PO'; }), rcvVal: val, rq: rq, itemTax: itemTax, sop: res[3].data };
+  var receipts = res[1].filter(function(r){ return r.receipt_type === 'PO'; }), rids = receipts.map(function(r){ return r.receive_id; }), dels = [];
+  if (rids.length) try { dels = await fetchAll(function(){ return sb.from('receipt_deliveries').select('receive_id,po_line_id,dr_no,dr_date,qty').in('receive_id', rids).order('dr_date').order('id'); }); } catch(e){ dels = []; }
+  var cost = {}; res[0].forEach(function(l){ cost[l.po_line_id] = Number(l.unit_cost) || 0; });
+  var C = sopBuildCols_(receipts, res[2], dels, cost);
+  return { head: head, lines: res[0], receipts: receipts, cols: C.cols, colVal: C.val, rq: C.rq, itemTax: itemTax, sop: res[3].data };
+}
+// SOP delivery columns: one per DR (DR No. + actual delivery date). A receipt without DRs
+// (or the part of it not on a DR) is one column on its Date Received.
+function sopBuildCols_(receipts, rlines, dels, cost){
+  var cols = {}, order = [], rq = {}, val = {}, got = {}, onDr = {}, rmap = {};
+  receipts.forEach(function(r){ rmap[r.receive_id] = r; });
+  var col = function(key, o){ if (!cols[key]){ cols[key] = o; order.push(key); } return cols[key]; };
+  var put = function(key, line, q){ var k = key + '|' + line; rq[k] = (rq[k] || 0) + q; val[key] = (val[key] || 0) + q * (cost[line] || 0); };
+  rlines.forEach(function(l){ if (l.po_line_id == null || !rmap[l.receive_id]) return; var k = l.receive_id + '|' + l.po_line_id; got[k] = (got[k] || 0) + (Number(l.qty_received) || 0); });
+  dels.forEach(function(d){ var rc = rmap[d.receive_id]; if (!rc) return;
+    var key = 'D|' + (d.dr_no || '') + '|' + d.dr_date, c = col(key, { key: key, date: d.dr_date, dr: d.dr_no || '', inv: rc.invoice_no || '', rcv: [] });
+    if (c.rcv.indexOf(d.receive_id) === -1) c.rcv.push(d.receive_id);
+    put(key, d.po_line_id, Number(d.qty) || 0); var k = d.receive_id + '|' + d.po_line_id; onDr[k] = (onDr[k] || 0) + (Number(d.qty) || 0); });
+  Object.keys(got).forEach(function(k){ var rem = got[k] - (onDr[k] || 0); if (rem <= 1e-9) return;
+    var rid = k.split('|')[0], r = rmap[rid], key = 'R|' + rid;
+    col(key, { key: key, date: r.date_received, dr: '', inv: r.invoice_no || '', rcv: [rid], noDr: true }); put(key, k.split('|')[1], rem); });
+  var list = order.map(function(k){ return cols[k]; }).sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : String(a.dr).localeCompare(String(b.dr)); });
+  return { cols: list, rq: rq, val: val };
 }
 // SOP item description = the PO Description typed in PO Creation, without the item code
 function sopDesc(l){
@@ -6466,10 +6602,17 @@ function sopDesc(l){
 // invoice no(s). and date(s) from every IAR / delivery of the PO — one date per invoice, in delivery order
 function sopInvFromIar_(E){
   var seen = {}, nos = [], dts = [];
-  E.receipts.forEach(function(r){ var n = String(r.invoice_no || '').trim(); if (!n || seen[n.toUpperCase()]) return; seen[n.toUpperCase()] = 1;
-    nos.push(n); dts.push(toMDY(r.invoice_date || r.date_received)); });
+  E.receipts.forEach(function(r){
+    var n = String(r.invoice_no || '').trim();
+    if (n){ if (seen[n.toUpperCase()]) return; seen[n.toUpperCase()] = 1; nos.push(n); dts.push(toMDY(r.invoice_date || r.date_received)); return; }
+    // no invoice yet: the DR No(s). and DR date(s) of that delivery
+    (E.cols || []).filter(function(c){ return c.dr && c.rcv.indexOf(r.receive_id) !== -1; }).forEach(function(c){
+      var k = 'DR ' + c.dr.toUpperCase(); if (seen[k]) return; seen[k] = 1; nos.push('DR ' + c.dr); dts.push(toMDY(c.date)); });
+  });
   return { inv: nos.join(', '), invD: dts.join(', ') };
 }
+function sopDelOn_(E){ return sopUniq((E.cols || []).map(function(c){ return toMDY(c.date); })).join(', '); }
+function sopDelRefill(){ document.getElementById('sopFDel').value = sopDelOn_(SOP_ED); sopFormChanged(); }
 function sopInvRefill(){
   var x = sopInvFromIar_(SOP_ED); document.getElementById('sopFInv').value = x.inv; document.getElementById('sopFInvD').value = x.invD; sopFormChanged();
 }
@@ -6481,9 +6624,9 @@ function sopDefaultTax(E, l){
   return sopTax(d) ? d : (SOP_TAX[0] ? SOP_TAX[0].code : '');
 }
 function sopLateRows(E, deadline){
-  return E.receipts.filter(function(r){ return deadline && sopDays(r.date_received, deadline) > 0 && E.rcvVal[r.receive_id] > 0; })
-    .map(function(r){ return { kind: 'LATE', label: 'DR ' + toMDY(r.date_received) + (r.invoice_no ? ' · Inv ' + r.invoice_no : ''),
-      amount: r2(E.rcvVal[r.receive_id]), days: sopDays(r.date_received, deadline), rate: SOP_PEN_RATE }; });
+  return E.cols.filter(function(c){ return deadline && sopDays(c.date, deadline) > 0 && E.colVal[c.key] > 0; })
+    .map(function(c){ return { kind: 'LATE', label: (c.dr ? 'DR ' + c.dr + ' · ' : 'DR ') + toMDY(c.date) + (!c.dr && c.inv ? ' · Inv ' + c.inv : ''),
+      amount: r2(E.colVal[c.key]), days: sopDays(c.date, deadline), rate: SOP_PEN_RATE }; });
 }
 function sopUndRow(E, deadline){
   if (!(E.undelivered > 0)) return null;
@@ -6517,7 +6660,7 @@ async function sopOpen(po){
       E.f = { sopDate: ymd(new Date()), cls: h.item_class || SOP_CLASS_BY_UNIT[h.category] || '', proj: h.project_name || '', addr: prev ? prev.supplier_address || '' : '', tin: h.tin || (prev ? prev.supplier_tin || '' : ''),
         deadline: h.ext_deadline || h.due_date || '', cm: 0,
         inv: sopInvFromIar_(E).inv, invD: sopInvFromIar_(E).invD,
-        delOn: sopUniq(E.receipts.map(function(r){ return toMDY(r.date_received); })).join(', '),
+        delOn: sopDelOn_(E),
         prep: String(ME.full_name || '').toUpperCase() };
       E.cmTax = null;
       if (h.waive_date) E.pen = [];
@@ -6576,16 +6719,17 @@ function sopTaxOpts(sel){ return SOP_TAX.filter(function(t){ return t.active || 
     esc(String(t.label).replace(/\s*\(.*\)\s*$/, '')) + ' · ' + (Number(t.bt_rate) || 0) + '+' + (Number(t.ewt_rate) || 0) + '%</option>'; }).join(''); }
 // delivery check: qty per DR, variance, undelivered amount, late days per DR
 function sopDeliveryGrid(){
-  var E = SOP_ED, ro = !CAN_EDIT, dl = E.f.deadline, rc = E.receipts;
+  var E = SOP_ED, ro = !CAN_EDIT, dl = E.f.deadline, rc = E.cols;
   var head = '<tr><th style="text-align:right">Qty</th><th>Description</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Amount</th><th>Tax type</th>' +
-    rc.map(function(r, i){ var dd = sopDays(r.date_received, dl);
-      return '<th class="sop-dr" title="' + esc(r.receive_id) + '">DR ' + (i + 1) + '<small>' + esc(toMDY(r.date_received)) + (r.invoice_no ? '<br>Inv ' + esc(r.invoice_no) : '') + '<br>' +
+    rc.map(function(r, i){ var dd = sopDays(r.date, dl);
+      return '<th class="sop-dr" title="' + esc(r.rcv.join(', ')) + (CAN_EDIT ? ' — click to see / change the DRs of this receipt' : '') + '"' + (CAN_EDIT ? ' style="cursor:pointer" onclick="sopDrEdit(\'' + esc(r.rcv[0]) + '\')"' : '') + '>DR ' + (i + 1) +
+        '<small>' + (r.dr ? '<b>' + esc(r.dr) + '</b><br>' : '') + esc(toMDY(r.date)) + (r.noDr ? '<br><i style="color:#9a6b00">date received</i>' : '') + (!r.dr && r.inv ? '<br>Inv ' + esc(r.inv) : '') + '<br>' +
         (dl ? (dd > 0 ? '<b class="late">' + dd + ' day' + (dd === 1 ? '' : 's') + ' late</b>' : '<span class="ok">Not late</span>') : '—') + '</small></th>'; }).join('') +
     '<th style="text-align:right">Delivered</th><th style="text-align:right">Variance</th><th style="text-align:right">Undelivered amt</th></tr>';
   var tot = { amt: 0, und: 0, dr: rc.map(function(){ return 0; }) };
   var body = E.lines.map(function(l){
     var q = Number(l.qty_ordered) || 0, c = Number(l.unit_cost) || 0, del = 0;
-    var cells = rc.map(function(r, i){ var v = E.rq[r.receive_id + '|' + l.po_line_id] || 0; del += v; tot.dr[i] += v * c; return '<td style="text-align:right">' + (v ? sopQty(v) : '') + '</td>'; }).join('');
+    var cells = rc.map(function(r, i){ var v = E.rq[r.key + '|' + l.po_line_id] || 0; del += v; tot.dr[i] += v * c; return '<td style="text-align:right">' + (v ? sopQty(v) : '') + '</td>'; }).join('');
     var vr = Math.max(0, q - del); tot.amt += q * c; tot.und += vr * c;
     return '<tr><td style="text-align:right">' + sopQty(q) + '</td><td class="sop-desc">' + esc(sopDesc(l)) + '</td><td style="text-align:right">' + sopMoney(c, false) + '</td>' +
       '<td style="text-align:right">' + sopMoney(q * c, false) + '</td><td><select class="sop-tax" data-line="' + l.po_line_id + '" ' + (ro ? 'disabled ' : '') + 'onchange="sopSetTax(' + l.po_line_id + ',this.value)">' + sopTaxOpts(E.lineTax[l.po_line_id]) + '</select></td>' + cells +
@@ -6595,8 +6739,20 @@ function sopDeliveryGrid(){
   var foot = '<tr class="sop-tot"><td></td><td>Totals</td><td></td><td style="text-align:right">' + sopMoney(tot.amt, false) + '</td><td></td>' +
     tot.dr.map(function(v){ return '<td style="text-align:right">' + sopMoney(v, false) + '</td>'; }).join('') + '<td></td><td></td><td style="text-align:right">' + sopMoney(tot.und) + '</td></tr>';
   return '<div class="ap-scroll" style="max-height:420px"><table class="ap-tbl sop-grid"><thead>' + head + '</thead><tbody>' + body + foot + '</tbody></table></div>' +
-    '<p class="ap-hint" style="margin:6px 0 0">Each DR column = qty received in that delivery (value at the bottom). Days late = delivery date − deadline (' + (dl ? esc(toMDY(dl)) : 'no deadline set') + ').' +
-    (E.head.cancel_date ? ' Undelivered balance was cancelled on <b>' + esc(toMDY(E.head.cancel_date)) + '</b>.' : '') + '</p>';
+    '<p class="ap-hint" style="margin:6px 0 0">Each DR column = qty delivered on that DR (value at the bottom). Days late = actual delivery date − deadline (' + (dl ? esc(toMDY(dl)) : 'no deadline set') + '). Columns marked <i>date received</i> have no DR typed yet.' +
+    (E.head.cancel_date ? ' Undelivered balance was cancelled on <b>' + esc(toMDY(E.head.cancel_date)) + '</b>.' : '') + '</p>' +
+    (CAN_EDIT && E.receipts.length ? '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:.8rem">📑 DR / Delivery Dates of: ' + E.receipts.map(function(r){
+      return '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem" onclick="sopDrEdit(\'' + esc(r.receive_id) + '\')">' + esc(r.receive_id) + ' · ' + esc(toMDY(r.date_received)) + '</button>'; }).join('') + '</div>' : '');
+}
+function sopDrEdit(rid){
+  var po = SOP_ED && SOP_ED.head.po_number; if (!po) return;
+  drEditReceipt(rid, async function(){
+    var E2 = await sopFetch(po), E = SOP_ED; E.cols = E2.cols; E.colVal = E2.colVal; E.rq = E2.rq; E.receipts = E2.receipts;
+    document.getElementById('sopGrid').innerHTML = sopDeliveryGrid();
+    if (confirm('Delivery dates saved. Recompute the late-delivery penalty rows and the DELIVERED ON dates now?')){
+      document.getElementById('sopFDel').value = sopDelOn_(E); sopReadForm(); if (!E.head.waive_date) sopPenRecalc(true); }
+    sopSumRender(); sopMsg('ok', '✅ DRs of ' + esc(rid) + ' saved.');
+  });
 }
 function sopSetTax(lineId, code){ SOP_ED.lineTax[lineId] = code;
   document.querySelectorAll('select[data-line="' + lineId + '"]').forEach(function(x){ if (x.value !== code) x.value = code; }); sopSumRender(); }
@@ -6681,7 +6837,8 @@ function sopRenderEditor(){
     '<table class="sp-s"><colgroup><col style="width:18%"><col style="width:12%"><col style="width:14%"><col style="width:8%"><col style="width:6%"><col style="width:14%"><col style="width:18%"><col style="width:36px"></colgroup>' +
       '<tr><td>PO NO.</td><td class="b u" colspan="3">' + esc(h.po_number) + '</td><td></td><td class="c ul">' + esc(toMDY(h.po_date)) + '</td><td></td><td></td></tr>' +
       '<tr><td>DELIVERED AT:</td><td colspan="7">' + esc(SOP_SET.sop_delivered_at || 'SPMC MMS') + '</td></tr>' +
-      '<tr><td>DELIVERED ON:</td><td colspan="7">' + spIn('sopFDel', f.delOn, { cls: 'w' }) + '</td></tr>' +
+      '<tr><td>DELIVERED ON:</td><td colspan="6">' + spIn('sopFDel', f.delOn, { cls: 'w' }) + '</td>' +
+        '<td>' + (CAN_EDIT ? '<button class="sx-x" style="background:#eaf2fb;color:#1f5f99" title="Fill again from the DR delivery dates" onclick="sopDelRefill()">↻</button>' : '') + '</td></tr>' +
       '<tr class="ln2"><td colspan="8"></td></tr>' +
       '<tr><td colspan="6">LESS: UNDELIVERED ITEMS <a href="#sopGridCard" class="sp-link">see delivery check ↓</a></td><td class="amt" id="spUnd"></td><td></td></tr>' +
       '<tr><td colspan="2">LESS: CREDIT MEMO</td><td colspan="2">' + spIn('sopFCmRef', f.cmRef, { cls: 'w', ph: 'CM no. / reference' }) + '</td><td colspan="2" class="r sp-cmtax"><select id="sopFCmTax" title="Credit memo is taken from this tax type" ' + (ro ? 'disabled ' : '') + 'onchange="SOP_ED.cmTax=this.value||null;sopSumRender()"><option value="">(biggest tax type)</option>' + sopTaxOpts(E.cmTax) + '</select></td>' +
@@ -7229,7 +7386,7 @@ function renderSopDoc(d){
     '<table class="s1-s"><colgroup><col style="width:17%"><col style="width:14%"><col style="width:13%"><col style="width:12%"><col style="width:8%"><col style="width:21%"><col style="width:15%"></colgroup>' +
       '<tr><td class="c">PO NO.</td><td class="b u" colspan="3">' + esc(d.po) + '</td><td></td><td class="c ul">' + esc(d.poDate) + '</td><td></td></tr>' +
       '<tr><td>DELIVERED AT:</td><td colspan="6">' + esc(set.sop_delivered_at || 'SPMC MMS') + '</td></tr>' +
-      '<tr><td>DELIVERED ON:</td><td colspan="6" style="white-space:normal">' + esc(f.delOn || '') + '</td></tr>' +
+      '<tr><td>DELIVERED ON:</td><td colspan="6" style="white-space:normal">' + esc(sopUniq(String(f.delOn || '').split(/\s*[,;]\s*/)).join(', ')) + '</td></tr>' +
       '<tr><td colspan="7" style="height:6px"></td></tr><tr class="ln2"><td colspan="7"></td></tr>' +
       '<tr><td colspan="6">LESS: UNDELIVERED ITEMS</td><td class="amt">' + M(t.undelivered) + '</td></tr>' +
       '<tr><td colspan="6">LESS: CREDIT MEMO' + (f.cmRef ? ' <span style="font-size:7.5pt">(' + esc(f.cmRef) + ')</span>' : '') + '</td><td class="amt">' + M(t.credit_memo) + '</td></tr>' +
@@ -7473,5 +7630,19 @@ async function docDel(id){
 
 mdyStart_();   // uniform MM/DD/YYYY dates
 </script>
+<div id="drMo" style="position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:900">
+  <div style="background:#fff;border-radius:12px;padding:18px 20px;width:min(1100px,96vw);max-height:90vh;overflow:auto">
+    <h3 style="color:#1a3a5c;margin:0 0 4px;display:flex;align-items:center;gap:8px">📑 DR / Delivery Dates <span id="drTitle" style="font-size:.8rem;color:#777;font-weight:400"></span><span style="flex:1"></span><button class="btn btn-out btn-sm" onclick="drClose()">✕</button></h3>
+    <p style="font-size:.8rem;color:#666;margin:0 0 10px">One column per DR: type the <b>DR No.</b> (or invoice no.) and the <b>actual Delivery Date</b>, then the qty of each item that came on that DR. An item that came on two dates gets a qty in two columns. The SOP uses these dates for the days late and the penalty. Not printed on the IAR.</p>
+    <div id="drBody"></div>
+    <div id="drMsg" style="margin-top:8px;font-size:.85rem"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-out btn-sm" onclick="drAddCol();drRender()">＋ Add DR column</button>
+      <span style="flex:1"></span>
+      <button class="btn btn-out btn-sm" onclick="drClearAll()">Clear all</button>
+      <button class="btn btn-ok btn-sm" id="drOkBtn" onclick="drDone()">✔ Done</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
