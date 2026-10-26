@@ -4250,8 +4250,8 @@ function renderEncItemDropdown(items){
   var dd = document.getElementById('encItemDropdown');
   if(!items.length){ dd.innerHTML = '<div class="item-dd-row item-dd-empty">No matching items.</div>'; dd.style.display=''; return; }
   dd.innerHTML = items.map(function(it){
-    var blocked = it.available <= 0 || it.manualOnly;
-    var reason = it.available <= 0 ? 'NO STOCK' : (it.manualOnly ? 'Manual RIS only' : (it.available + ' avail'));
+    var blocked = it.available <= 0;
+    var reason = it.available <= 0 ? 'NO STOCK' : (it.available + ' avail' + (it.manualOnly ? ' · Manual RIS' : ''));
     var tagTxt = it.manualOnly ? ' <span class="tag-manual">M</span>' : '';
     var cls = 'item-dd-row' + (blocked ? ' item-dd-blocked' : '');
     return '<div class="'+cls+'" data-code="'+esc(it.code)+'">'+
@@ -4280,7 +4280,6 @@ function addEncItem(){
   if(qty <= 0){ showEncErr('Quantity must be greater than zero.'); return; }
   var it = (ENC_FORM.items || []).find(function(x){ return x.code === code; });
   if(!it || it.available <= 0){ showEncErr('That item has no stock available.'); return; }
-  if(it.manualOnly){ showEncErr('That item is non-PO stock — it needs a Manual RIS via Approvals, not this form.'); return; }
   if(qty > it.available){ showEncErr('Only '+it.available+' available for '+code+'.'); return; }
   if(ENC_CART.some(function(c){ return c.code===code; })){ showEncErr('That item is already in the list — remove it first to change the qty.'); return; }
 
