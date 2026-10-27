@@ -1261,7 +1261,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       </div>
       <div style="max-height:46vh;overflow:auto">
         <table class="rc-brk" style="width:100%;border-collapse:collapse;font-size:.85rem">
-          <thead><tr style="background:#f1f4f8"><th style="padding:6px">#</th><th style="min-width:170px">Assigned Code <span style="font-weight:400;color:#888">(optional)</span></th><th>Item Description (piece)</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Expiry (optional)</th><th></th></tr></thead>
+          <thead><tr style="background:#f1f4f8"><th style="padding:6px">#</th><th style="min-width:170px">Assigned Code <span style="font-weight:400;color:#888">(optional)</span></th><th>Item Description (piece)</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th id="rcBrkExpH">Expiry (optional)</th><th></th></tr></thead>
           <tbody id="rcBrkBody"></tbody>
         </table>
       </div>
@@ -2829,6 +2829,7 @@ function rcBrkOpen(key){
   document.getElementById('rcBrkBal').textContent = r.balance != null ? 'PO balance: ' + r.balance + ' ' + (r.unit || '') : '';
   document.getElementById('rcBrkClear').style.display = (r.parts && r.parts.length) ? '' : 'none';
   document.getElementById('rcBrkErr').style.display = 'none';
+  document.getElementById('rcBrkExpH').innerHTML = rcBrkSn_() ? 'Serial Number <span style="font-weight:400;color:#888">(optional)</span>' : 'Expiry (optional)';
   rcBrkRender();
   document.getElementById('rcMoBrk').classList.add('show');
 }
@@ -2840,17 +2841,27 @@ function rcBrkRender(){
       '<td><input type="text" id="rcBrkU' + i + '" value="' + esc(p.unit) + '" placeholder="pc, set…" oninput="rcBrkSet(' + i + ',\'unit\',this.value)" style="width:70px"/></td>' +
       '<td><input type="number" min="0" step="1" value="' + esc(p.qty) + '" oninput="rcBrkSet(' + i + ',\'qty\',this.value)" style="width:70px"/></td>' +
       '<td><input type="number" min="0" step="0.01" value="' + esc(p.cost) + '" oninput="rcBrkSet(' + i + ',\'cost\',this.value)" style="width:90px"/></td>' +
-      '<td><input type="date" value="' + esc(p.exp) + '" onchange="rcBrkSet(' + i + ',\'exp\',this.value)"/></td>' +
+      (rcBrkSn_() ? '<td><input type="text" value="' + esc(p.sn || '') + '" placeholder="S/N" oninput="rcBrkSet(' + i + ',\'sn\',this.value)" style="width:140px"/>' +
+          (p.newCode ? '<div style="font-size:.7rem;color:#1e8449">＋ new code ' + esc(p.code) + ' — added to Item Codes on Save</div>' : '') + '</td>'
+        : '<td><input type="date" value="' + esc(p.exp) + '" onchange="rcBrkSet(' + i + ',\'exp\',this.value)"/></td>') +
       '<td><button type="button" class="btn btn-del btn-sm" onclick="rcBrkDel(' + i + ')">✕</button></td></tr>';
   }).join('');
 }
 function rcBrkSet(i, f, v){ RC_BRK.parts[i][f] = v; }
+// EQUIPMENT: serial number instead of expiry, and a new code can be typed (added to Item Codes on Save)
+function rcBrkSn_(){ return RC_CAT === 'EQUIPMENT'; }
 // a code typed / picked → its description and unit come from the item list (unit cost and qty are typed)
 function rcBrkCodePicked(i, el){
   var code = String(el.value || '').split(' — ')[0].trim().toUpperCase(), it = RC_ITEM_BY_CODE[code];
   var p = RC_BRK.parts[i];
-  if (!code){ p.code = ''; return; }
+  if (!code){ p.code = ''; p.newCode = false; return; }
+  if ((!it || code.indexOf('AUTO-') === 0) && rcBrkSn_() && /^[A-Z0-9][A-Z0-9.\/-]{1,29}$/.test(code) && code.indexOf('AUTO-') !== 0 && code.indexOf('TMP-') !== 0){
+    p.code = code; p.newCode = true; el.value = code; document.getElementById('rcBrkErr').style.display = 'none';
+    rcBrkRender(); var d0 = document.getElementById('rcBrkD' + i); if (d0 && !p.desc) d0.focus();
+    return;
+  }
   if (!it || code.indexOf('AUTO-') === 0){ p.code = ''; el.value = ''; rcBrkErr('Code "' + code + '" is not in the item list — add it in Master Lists → Item Codes first, or leave the code blank.'); return; }
+  p.newCode = false;
   document.getElementById('rcBrkErr').style.display = 'none';
   p.code = it.code; el.value = it.code; p.desc = it.description; if (it.unit) p.unit = it.unit;
   var d = document.getElementById('rcBrkD' + i); if (d) d.value = p.desc;
@@ -2873,7 +2884,7 @@ function rcBrkOk(){
   if (!parts.length){ rcBrkErr('List at least one piece.'); return; }
   for (var i = 0; i < parts.length; i++){
     var p = parts[i];
-    if (!String(p.desc || '').trim()){ rcBrkErr('Piece #' + (i + 1) + ' needs a description (or an assigned code).'); return; }
+    if (!String(p.desc || '').trim()){ rcBrkErr('Piece #' + (i + 1) + (p.newCode ? ' (new code ' + p.code + ') needs its item description.' : ' needs a description (or an assigned code).')); return; }
     if (!String(p.unit || '').trim()){ rcBrkErr('Enter the unit for ' + p.desc + '.'); return; }
     if (!(Number(p.qty) > 0)){ rcBrkErr('Enter the qty for ' + p.desc + '.'); return; }
     p.desc = String(p.desc).trim(); p.unit = String(p.unit).trim(); p.qty = Number(p.qty);
@@ -2893,8 +2904,9 @@ function groupIarItems(items){
   var order = [], byCode = {};
   items.forEach(function(it){
     var k = (it.lot ? 'LOT:' + it.lot + '|' : '') + (it.code || ('~' + it.desc + '|' + it.unit)) + (it.free ? '|FREE' : '');
-    if (!byCode[k]){ byCode[k] = { code: it.code, desc: it.desc, unit: it.unit, qty: 0, lot: it.lot || '' }; order.push(k); }
+    if (!byCode[k]){ byCode[k] = { code: it.code, desc: it.desc, unit: it.unit, qty: 0, lot: it.lot || '', sns: [] }; order.push(k); }
     byCode[k].qty += (Number(it.qty) || 0);
+    if (it.sn && byCode[k].sns.indexOf(String(it.sn).toUpperCase()) === -1) byCode[k].sns.push(String(it.sn).toUpperCase());
   });
   return order.map(function(k){ return byCode[k]; });
 }
@@ -2903,7 +2915,7 @@ function rcFormIarData(){
   if (RC_IS_ADV || !RC_PO){ rcAlert('error', 'Select a PO first to preview the IAR.'); return null; }
   var items = [];
   RC_ROWS.filter(function(r){ return r.itemCode && r.qty > 0; }).forEach(function(r){
-    if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: p.code || '', desc: p.desc, unit: p.unit, qty: p.qty, lot: r.poDesc || r.desc }); });
+    if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: p.code || '', desc: p.desc, unit: p.unit, qty: p.qty, lot: r.poDesc || r.desc, sn: p.sn || '' }); });
     else items.push({ code: r.itemCode, desc: r.desc + (r.free ? ' — FREE GOODS' : ''), unit: r.unit, qty: r.qty, free: !!r.free });
   });
   if (!items.length){ rcAlert('error', 'No items with Qty Received to preview.'); return null; }
@@ -2991,7 +3003,7 @@ async function rcIarFromLog(receiveId){
       project: po.data ? po.data.project_name || '' : '',
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
       dateRec: r0.date, loc: r0.location, reqOff: reqOff, unit: r0.category || (po.data ? po.data.category : ''), poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
-      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
+      items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '', sn: x.serial_no || '' }; })) });
   } catch(e){ wait('Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.', true); }
 }
 
@@ -3022,7 +3034,7 @@ function rcSave(){
       if (perLine[r.poLineId] > bal){ rcAlert('error', esc(r.itemCode) + ': total Qty Received (' + perLine[r.poLineId] + ') is more than the PO balance (' + bal + ').'); return; }
     }
     var itm = { po_line_id: r.free ? null : r.poLineId, free_goods: !!r.free, free_of_line: r.free ? r.poLineId : null, item_code: r.itemCode, description: r.desc, unit: r.unit, qty_received: r.qty, unit_cost: r.free ? 0 : r.cost, expiry_date: (r.noExp || RC_CATERING || rParts) ? '' : r.exp, remarks: String(r.remarks || '').trim(), batch_no: rcShowBatch_() ? String(r.batchNo || '').trim() : '' };
-    if (rParts) itm.parts = rParts.map(function(p){ return { item_code: p.code || '', description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '' }; });
+    if (rParts) itm.parts = rParts.map(function(p){ return { item_code: p.code || '', description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '', serial_no: p.sn || '' }; });
     items.push(itm);
   }
   if (!items.length && !cancels.length){ rcAlert('error', 'Enter a Qty Received on at least one item' + (RC_IS_ADV ? '.' : ', or tick “Cancel Bal.” to close out a line.')); return; }
@@ -3426,8 +3438,10 @@ var head = '';
 if (it.lot && it.lot !== lastLot){ head = '<tr class="lot"><td></td><td>'+esc(it.lot)+'</td><td></td><td></td></tr>'; nLotRows++; }
 lastLot = it.lot || null;
 // a piece of a LOT: its assigned code + qty (the description only while it has no code yet)
+var sn = it.sns && it.sns.length ? '<tr><td></td><td style="padding-left:'+(it.lot ? 26 : 12)+'px;font-size:7.5pt">S/N: '+esc(it.sns.join(', '))+'</td><td></td><td></td></tr>' : '';
+if (sn) nLotRows++;
 return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+esc(it.desc)+'</td><td class="c">'+esc(it.unit)+'</td>'+
-'<td class="c">'+it.qty+'</td></tr>';
+'<td class="c">'+it.qty+'</td></tr>' + sn;
 }).join('') + '<tr><td></td><td class="c" style="font-weight:bold">***NOTHING FOLLOWS***</td><td></td><td></td></tr>';
 rowsHtml = projRow + rowsHtml;
 // Pad the table out with blank ruled rows — same as the official form's
