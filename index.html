@@ -4541,6 +4541,11 @@ var PT_CHECKS = [], PT_CHECKS_OPEN = false;
 async function ptChecksLoad(){
   try { PT_CHECKS = await fetchAll(function(){ var q = sb.from('v_receipt_checks').select('*'); if (myUnits()) q = q.in('unit', myUnits()); return q.order('po_number'); }); }
   catch(e){ PT_CHECKS = []; }
+  // "MORE delivered" items the Approver already marked Done in To Do (old deliveries before the app) are not shown again
+  try { if (PT_CHECKS.some(function(c){ return c.kind === 'DELIVERED IS HIGHER'; })){
+    var dn = {}; (await fetchAll(function(){ return sb.from('approver_todos').select('todo_key,done_by').eq('status', 'DONE').order('id'); }))
+      .forEach(function(t){ if (/^RCHK:DELIVERED IS HIGHER:/.test(t.todo_key || '') && t.done_by !== 'SYSTEM') dn[t.todo_key] = 1; });
+    PT_CHECKS = PT_CHECKS.filter(function(c){ return !(c.kind === 'DELIVERED IS HIGHER' && dn['RCHK:DELIVERED IS HIGHER:' + c.po_line_id]); }); } } catch(e){}
   ptChecksRender();
 }
 function ptChecksRender(){
@@ -5175,7 +5180,8 @@ function apTodoRender(){
     '<div class="ap-search">' +
       '<select onchange="TODO_SHOW=this.value;apTodoRender()"><option value="OPEN"' + (TODO_SHOW === 'OPEN' ? ' selected' : '') + '>To do (' + nOpen + ')</option><option value="DONE"' + (TODO_SHOW === 'DONE' ? ' selected' : '') + '>Done</option><option value="ALL"' + (TODO_SHOW === 'ALL' ? ' selected' : '') + '>All</option></select>' +
       (!units || units.length > 1 ? '<select onchange="TODO_UNIT=this.value;apTodoRender()"><option value="">' + (units ? 'All my units' : 'All units') + '</option>' + (units || PO_CATEGORIES).map(function(u){ return '<option' + (TODO_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>' : '') +
-      '<button class="sx-btn blue sm" onclick="apTodoView()">↻ Refresh</button></div>' +
+      '<button class="sx-btn blue sm" onclick="apTodoView()">↻ Refresh</button>' +
+      (can && vis.filter(apTodoIsOld_).length ? ' <button class="sx-btn sm" style="background:#7d3c98;color:#fff" onclick="apTodoOld(TODO_ROWS.filter(function(t){ return (!TODO_UNIT || t.unit === TODO_UNIT) && apTodoIsOld_(t); }).map(function(t){ return t.id; }))">✓ All ' + vis.filter(apTodoIsOld_).length + ' "MORE delivered" = old deliveries (before the app)</button>' : '') + '</div>' +
     (rows.length ? '<div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>Unit</th><th>PO No.</th><th>Item</th><th>What to check</th><th>Details</th><th></th></tr></thead><tbody>' +
       rows.map(function(t){
         var done = t.status === 'DONE';
@@ -5186,8 +5192,22 @@ function apTodoRender(){
           '<td class="nw">' + (t.po_number ? '<button class="sx-btn blue sm" onclick="apTodoOpen(\'' + esc(t.po_number) + '\')">Open PO</button> ' : '') +
             (!t.po_number && /^BEG-/.test(t.todo_key || '') ? '<button class="sx-btn blue sm" onclick="apBegOpen(\'' + esc(String(t.item || '').split(' — ')[0]) + '\')">Open Beg. Balance</button> ' : '') +
             (can ? (done ? '<button class="sx-btn gray sm" onclick="apTodoSet(' + t.id + ',false)">↺ Reopen</button>'
-                         : '<input type="text" id="tdN' + t.id + '" placeholder="note (optional)" style="width:130px;margin:0 4px"/><button class="sx-btn green sm" onclick="apTodoSet(' + t.id + ',true)">✓ Done</button>') : '') + '</td></tr>';
+                         : (/^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || '') ? '<button class="sx-btn sm" style="background:#7d3c98;color:#fff" title="The extra delivered qty is from deliveries before the app (old monitoring) — correct as it is" onclick="apTodoOld([' + t.id + '])">✓ Old delivery (before the app)</button> ' : '') +
+                           '<input type="text" id="tdN' + t.id + '" placeholder="note (optional)" style="width:130px;margin:0 4px"/><button class="sx-btn green sm" onclick="apTodoSet(' + t.id + ',true)">✓ Done</button>') : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>' : '<div class="ap-empty">' + (TODO_SHOW === 'OPEN' ? '🎉 Nothing to do.' : 'Nothing here.') + '</div>') + '</div>';
+}
+// "the PO shows MORE delivered than its receipts" because of deliveries before the app → Done, it does not come back
+function apTodoIsOld_(t){ return t.status === 'OPEN' && /^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || ''); }
+async function apTodoOld(ids){
+  if (!ids.length) return;
+  if (ids.length > 1 && !confirm('Mark ' + ids.length + ' "MORE delivered than its receipts" To Do(s) as old deliveries (before the app)?\n\nCheck a few first. They will not come back.')) return;
+  var bad = 0;
+  for (var i = 0; i < ids.length; i++){
+    var r = await sb.rpc('todo_set_done', { p_id: ids[i], p_done: true, p_note: 'Old delivery before the app (old monitoring) — correct as it is' });
+    if (r.error) bad++;
+  }
+  apMsg(bad ? 'err' : 'ok', bad ? '❌ ' + bad + ' could not be marked.' : '✅ ' + ids.length + ' marked Done — old deliveries before the app.');
+  await apTodoView();
 }
 // ── Beginning balance: the Approver corrects a beginning batch or adds a missed one ──
 var BEG_IO = null, BEG_ZERO = '', BEG_SPLIT = null, BEG_SP = [];
