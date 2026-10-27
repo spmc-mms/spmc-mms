@@ -6180,7 +6180,7 @@ function rpView(){
       cls: s.cls ? keep.map(function(i){ return s.cls[i]; }) : null });
   }) });
 }
-var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
+var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['inout','Per Item In / Out'],['rcvlist','Receiving List'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
 function rpMonthStart(){ var d = new Date(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function rpMsg(kind, t){ var b = document.getElementById('rpMsg'); b.className = 'ap-msg ' + (kind || ''); b.innerHTML = t || ''; }
 
@@ -6207,6 +6207,12 @@ function rpSwitch(t){
   if (t === 'reo') f = rpSUField();
   if (t === 'fast') f = rpSUField() + apField('From', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }) +
       '<div class="ap-f"><label>Top</label><select id="rpTop"><option>10</option><option selected>50</option><option>100</option><option>500</option></select></div>';
+  if (t === 'inout') f = rpSUField() + apField('From', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }) + apField('Search code / description', 'rpSearch', '') +
+      '<div class="ap-f"><label>Show</label><select id="rpIoShow"><option value="">All items</option><option value="MOVE">With receipts or issuances in the period</option><option value="DIFF">Only where on hand ≠ expected</option></select></div>';
+  if (t === 'rcvlist') f = rpSUField() + apField('Date Received from', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('to', 'rpTo', today, { type: 'date' }) +
+      '<div class="ap-f"><label>Supplier</label><input type="text" id="rpSup" list="rpSupDl" placeholder="All suppliers" autocomplete="off"/>' +
+        '<datalist id="rpSupDl">' + ((AP_LISTS && AP_LISTS.sup) || []).map(function(x){ return '<option value="' + esc(x.supplier_name) + '"></option>'; }).join('') + '</datalist></div>' +
+      apField('PO No. / item / brand', 'rpSearch', '');
   if (t === 'month') { var d = new Date(); f = rpSUField() + apField('From', 'rpFrom', ymd(new Date(d.getFullYear(), d.getMonth() - 11, 1)), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }); }
   if (t === 'po') f = '<div class="ap-f"><label>Unit</label><select id="rpUnit"' + (ME.unit ? ' disabled' : '') + '>' + (ME.unit ? '' : '<option value="">All units</option>') + apOpt(cats, ME.unit || '') + '</select></div>' +
       '<div class="ap-f"><label>Delivery Status</label><select id="rpPoSt"><option value="">All</option><option>OPEN</option><option>PARTIAL</option><option>COMPLETE</option><option value="NOT COMPLETE">Not complete (open + partial)</option></select></div>' +
@@ -6360,6 +6366,37 @@ async function rpRun(){
       RP_CUR = { title: 'Fast-Moving Items', sub: apVal('rpFrom') + ' to ' + apVal('rpTo') + rpSUText(), kv: [],
         sections: [{ cols: ['Rank','Code','Description','Unit','Qty Issued','No. of RIS','No. of End Users'],
           rows: (ff.data || []).map(function(x, i){ return [i + 1, x.code, x.desc, x.unit, x.qty, x.ris_count, x.end_users]; }) }] };
+    }
+    if (t === 'inout'){
+      var f1 = apVal('rpFrom'), t1 = apVal('rpTo'); if (!f1 || !t1){ rpMsg('err', 'Pick the From and To dates.'); document.getElementById('rpOut').innerHTML = ''; return; }
+      var io = await sb.rpc('report_item_inout', { p_from: f1, p_to: t1, p_unit: rpSU() }); if (io.error) throw io.error;
+      var q1 = apVal('rpSearch').toLowerCase(), show = apVal('rpIoShow'), isToday = t1 >= today, N = function(v){ return Number(v) || 0; };
+      var rows1 = (io.data || []).filter(function(x){
+        if (q1 && (x.code + ' ' + x.desc).toLowerCase().indexOf(q1) === -1) return false;
+        if (show === 'MOVE' && !N(x.received) && !N(x.issued)) return false;
+        if (show === 'DIFF' && (!isToday || N(x.on_hand) === N(x.expected))) return false;
+        return true; });
+      var cols1 = ['Stock Unit','Code','Item Description','Unit','Balance before ' + toMDY(f1),'+ Beginning Inventory','+ Received','− Issued','± Adjust / Transfer / Return','= Expected Ending Balance'].concat(isToday ? ['On Hand Now','Difference'] : []);
+      var tot = function(k){ return rows1.reduce(function(a, x){ return a + N(x[k]); }, 0); };
+      RP_CUR = { title: 'Per Item In / Out — Expected Ending Balance', sub: toMDY(f1) + ' to ' + toMDY(t1) + rpSUText() + (isToday ? '' : ' · (On hand now / Difference only when the To date is today)'),
+        kv: [['Items', rows1.length], ['Qty received', tot('received')], ['Qty issued', tot('issued')]].concat(isToday ? [['Items where on hand ≠ expected', rows1.filter(function(x){ return N(x.on_hand) !== N(x.expected); }).length]] : []),
+        sections: [{ cols: cols1, rows: rows1.map(function(x){
+            return [x.unit, x.code, x.desc, x.uom || '', N(x.opening), N(x.beg_inv), N(x.received), N(x.issued), N(x.adjust), N(x.expected)].concat(isToday ? [N(x.on_hand), N(x.on_hand) - N(x.expected)] : []); }),
+          cls: cols1.map(function(h){ return h === 'Difference' ? function(v){ return Number(v) ? 'rp-out' : ''; } : null; }) }] };
+    }
+    if (t === 'rcvlist'){
+      var f2 = apVal('rpFrom'), t2 = apVal('rpTo'), su = rpSU(), supF2 = apVal('rpSup').toUpperCase(), q2 = apVal('rpSearch').toLowerCase();
+      var rl = await fetchAll(function(){ var q = sb.from('v_receipt_lines').select('receive_id,receipt_type,date,po_number,supplier,item_code,description,unit,qty_received,expiry_date,batch_no,remarks,iar_no,invoice_no,location,category,free_goods');
+        if (f2) q = q.gte('date', f2); if (t2) q = q.lte('date', t2); if (su) q = q.eq('category', su);
+        return q.order('date').order('receive_id').order('receipt_line_id'); });
+      rl = rl.filter(function(x){ return (!supF2 || String(x.supplier || '').toUpperCase().indexOf(supF2) !== -1) &&
+        (!q2 || [x.po_number, x.item_code, x.description, x.remarks, x.batch_no, x.receive_id, x.iar_no].join(' ').toLowerCase().indexOf(q2) !== -1); });
+      RP_CUR = { title: 'Receiving List', sub: (f2 ? toMDY(f2) : 'start') + ' to ' + (t2 ? toMDY(t2) : 'today') + rpSUText() + (supF2 ? ' · Supplier: ' + apVal('rpSup') : ''),
+        kv: [['Lines', rl.length], ['Receipts (RCV)', sopUniq(rl.map(function(x){ return x.receive_id; })).length], ['Total qty', rl.reduce(function(a, x){ return a + (Number(x.qty_received) || 0); }, 0)]],
+        sections: [{ cols: ['Date Received','PO No.','Supplier','Item Code','Item Description','Qty','Unit','Expiry Date','Batch / Lot #','Brand','Remarks','RCV No.','IAR No.','Invoice / DR','Location','Stock Unit'],
+          rows: rl.map(function(x){ return [toMDY(x.date), x.po_number || (x.receipt_type === 'ADVANCE' ? 'ADVANCE' : ''), x.supplier, x.item_code, x.description, Number(x.qty_received) || 0, x.unit || '',
+            x.expiry_date ? toMDY(x.expiry_date) : 'no expiry', x.batch_no || '', x.remarks || '', x.free_goods ? 'FREE GOODS' : '',
+            x.receive_id, x.iar_no || '', x.invoice_no || '', x.location || '', x.category || '']; }) }] };
     }
     if (t === 'month'){
       var mm = await sb.rpc('report_monthly', { p_from: apVal('rpFrom'), p_to: apVal('rpTo'), p_unit: rpSU() }); if (mm.error) throw mm.error;
