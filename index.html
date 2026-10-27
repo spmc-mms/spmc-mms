@@ -5615,6 +5615,7 @@ function apPoRender(){
         ((c.rcvByLine[l.po_line_id] || []).length
           ? '<div style="margin-top:3px;font-size:.74rem;line-height:1.5">' + c.rcvByLine[l.po_line_id].map(function(x){
               return '<a href="#" title="Open this receipt in Receive / IAR" onclick="event.preventDefault();apRcvGo(\'' + esc(x.id) + '\')"><b>' + esc(x.id) + '</b></a> <span class="ap-ro">' + esc(toMDY(x.d) || '') + (x.iar ? ' · IAR ' + esc(x.iar) : '') + '</span>'; }).join('<br>') + '</div>'
+          : apNum(l.qty_delivered) > 0 ? '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#5b21b6">delivered before the app (old monitoring) — no RCV</div>'
           : '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#b9770e">NO DELIVERY YET</div>') + '</td>' +
       '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') +
         (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') + '</td></tr>';
