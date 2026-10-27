@@ -4443,8 +4443,8 @@ var PT_POST_FINAL = ['PARTIAL', 'FOR SOP', 'PENDING', 'TRANSMITTED TO CAO', 'TRA
 var PT_DST = { 'COMPLETE': 'complete', 'PARTIAL': 'partial', 'NO DELIVERY': 'nodelivery', 'OPEN': 'open', 'CANCELLED BALANCE': 'cancelled', 'CANCELLED': 'cancelled' };
 
 function ptCanRoute(){ return ['Admin', 'Encoder', 'Approver'].indexOf(ME.role) !== -1; }
-function ptCanInspect(){ return ME.role === 'Inspector' || ME.role === 'Admin'; }
-function ptCanAccept(){ return ME.role === 'Acceptor' || ME.role === 'Admin'; }
+function ptCanInspect(){ return ME.role === 'Inspector' || ME.role === 'Approver' || ME.role === 'Admin'; }
+function ptCanAccept(){ return ME.role === 'Acceptor' || ME.role === 'Approver' || ME.role === 'Admin'; }
 function ptStName(s){ return s === 'RETURNED' ? 'RETURNED BY ACCTG' : s; }
 function ptBadge(s, clickAttr){
   return '<span class="pt-badge ' + (PT_BADGE[s] || 'b-rack') + (clickAttr ? ' pt-click' : '') + '"' + (clickAttr || '') + '>' + esc(ptStName(s)) + '</span>';
@@ -4610,7 +4610,8 @@ function ptPOs(){
     var p = map[k], te = ent[k], rec = p.rec;
     var recStamp = rec ? String(rec.updated_at || rec.filed_date || rec.transmitted_date || rec.processed_date || rec.date_received || '') : '';
     var trailSt = te ? te.st : (p.lines.length ? ptNoTrailSt(p.lines) : '');
-    if (rec && (!te || recStamp >= te.s || PT_POST_FINAL.indexOf(te.st) !== -1)){ p.status = rec.sop_status; p.other = te && PT_POST_FINAL.indexOf(te.st) === -1 ? te.st : ''; }
+    if (rec && rec.sop_status === 'ON GOING'){ p.status = trailSt || 'RACK'; p.other = ''; }
+    else if (rec && (!te || recStamp >= te.s || PT_POST_FINAL.indexOf(te.st) !== -1)){ p.status = rec.sop_status; p.other = te && PT_POST_FINAL.indexOf(te.st) === -1 ? te.st : ''; }
     else { p.status = trailSt; p.other = rec ? rec.sop_status : ''; }
     p.status = ptStName(p.status); p.other = ptStName(p.other);
     p.stamp = [te ? te.s : '', recStamp].sort().pop();
@@ -4682,7 +4683,10 @@ function ptOpenPo(key){
   box.innerHTML = '<div class="pt-mhead"><b>' + esc(p.po_number) + '</b> — ' + esc(p.supplier || '') + ' <span class="pt-cat">' + esc(p.category || '') + '</span>' +
       '<div class="pt-msub">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR # ' : 'NOA # ') + esc(ptNoaOf(p.po_number)) + ' · ' : '') + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
     '<div class="pt-mstatus">Current PO Status: ' + ptBadge(p.status || 'RACK') + (p.other && p.other !== p.status ? '<span class="pt-note">also ' + esc(p.other) + '</span>' : '') + '</div>' +
-    (a ? '<div id="monEdPt"></div>' : '<p class="pt-note">No SOP record yet — the SOP status (For SOP, Pending, Processed …) starts once the PO is finalized FOR SOP or added in SOP Monitoring.</p>') +
+    (a ? '<div id="monEdPt"></div>' : p.category === 'EQUIPMENT' && ptCanRoute()
+      ? '<div id="monEdPt"><p class="pt-note">📋 EQUIPMENT — you can already list the <b>lacking requirements</b> and remarks while this PO is still on going. ' +
+        '<button class="pt-btn pt-indigo" onclick="ptEqLacking(\'' + esc(key) + '\')">📋 Lacking requirements / remarks</button></p></div>'
+      : '<p class="pt-note">No SOP record yet — the SOP status (For SOP, Pending, Processed …) starts once the PO is finalized FOR SOP or added in SOP Monitoring.</p>') +
     lines + '<div id="ptPoRem"></div>' + ptDocsOnFile(p.po_number) +
     '<div class="pt-mfoot"><button class="pt-btn pt-gray" onclick="ptCloseModal()">Close</button></div>';
   document.getElementById('ptModal').classList.remove('pt-hidden');
@@ -4694,6 +4698,12 @@ function ptOpenPo(key){
   }, function(){});
 }
 
+// EQUIPMENT: start the lacking-requirements record of a PO that is still on going
+function ptEqLacking(key){
+  var p = ptPOs().filter(function(x){ return x.key === key; })[0]; if (!p) return;
+  MON_CTX = 'pt';
+  monEdit(0, null, { po_number: p.po_number, supplier: p.supplier || '', unit: 'EQUIPMENT', amount: p.lineAmt != null ? Math.round(p.lineAmt * 100) / 100 : '', sop_status: 'ON GOING' });
+}
 function ptTable(rows, key){
   if (!rows.length) return '<div class="pt-empty">Nothing here right now.</div>';
   var cols = {
@@ -7001,7 +7011,8 @@ var MON_ROWS = [], MON_ST = '', MON_EDIT = null, MON_UNIT = '', MON_MAX = 300;
 // in the PO Status Trail Summary, with the PO Trail's own status names
 var MON_STATUS = [
   { s: 'FOR SOP', c: '#1f618d', b: '#eaf2f8', i: '📝' },
-  { s: 'PENDING', c: '#b9770e', b: '#fef5e7', i: '⏸' }
+  { s: 'PENDING', c: '#b9770e', b: '#fef5e7', i: '⏸' },
+  { s: 'ON GOING', c: '#4b5563', b: '#eef0f3', i: '⏳' }    // EQUIPMENT: lacking requirements kept while the PO is still on going
 ];
 var MON_CTX = 'sop';   // which page the ✎ Update form is on: 'sop' (SOP Monitoring) or 'pt' (PO Trail → After SOP)
 var MON_OTHER = [
@@ -7106,10 +7117,10 @@ function monCanEdit(){ return MON_CTX === 'pt' ? ptCanRoute() : CAN_EDIT; }
 function monShortD(iso){ var d = new Date(String(iso).slice(0, 10) + 'T00:00:00'); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
 function monStPill(s){ var x = monSt(s); return '<span class="mn-b" style="color:' + x.c + ';background:' + x.b + '">' + x.i + ' ' + esc(s) + '</span>'; }
 
-function monEdit(id, po){
+function monEdit(id, po, preset){
   var SRC = MON_CTX === 'pt' ? PT_AS_ROWS : MON_ROWS;
   var r = id ? SRC.filter(function(x){ return x.id === id; })[0] : (po ? SRC.filter(function(x){ return !x.id && x.po_number === po; })[0] : null);
-  MON_EDIT = r ? Object.assign({}, r) : { id: null, sop_status: 'FOR SOP' };
+  MON_EDIT = r ? Object.assign({}, r) : (preset ? Object.assign({ id: null }, preset) : { id: null, sop_status: 'FOR SOP' });
   if (r && !r.id) MON_EDIT.id = null;   // system PO not yet in the list → saved as a new row
   MON_LK = lkParse(MON_EDIT.lacking); MON_HIST = []; MON_TL_ADD = ''; MON_TL_EDIT = null; MON_TRAIL_ALL = false; MON_LK_OTHER = false;
   var e = MON_EDIT, isNew = !e.id, ed = monCanEdit(), ro = ed ? '' : ' disabled';
@@ -7125,7 +7136,7 @@ function monEdit(id, po){
       fld('Transmitted to', 'mnTo', e.transmitted_to || '') + fld('Folder', 'mnFol', e.folder || '') +
       (isNew && !ME.unit ? '<div class="ap-f"><label>Unit</label><select id="mnUnit">' + PO_CATEGORIES.map(function(u){ return '<option' + ((e.unit || 'SUPPLIES UNIT') === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' : '') +
     '</div>' +
-    (ed ? '<div class="mn-stbox"><div class="ap-f"><label>Status</label><select id="mnSt" onchange="monStChanged()">' + MON_STATUS.concat(MON_OTHER).map(function(x){ return '<option' + (x.s === e.sop_status ? ' selected' : '') + '>' + esc(x.s) + '</option>'; }).join('') + '</select></div>' +
+    (ed ? '<div class="mn-stbox"><div class="ap-f"><label>Status</label><select id="mnSt" onchange="monStChanged()">' + MON_STATUS.concat(MON_OTHER).filter(function(x){ return x.s !== 'ON GOING' || e.sop_status === 'ON GOING' || (e.unit || '') === 'EQUIPMENT'; }).map(function(x){ return '<option' + (x.s === e.sop_status ? ' selected' : '') + '>' + esc(x.s) + '</option>'; }).join('') + '</select></div>' +
       '<div class="ap-f mn-stnew" style="display:none"><label>Date of this status</label><input type="date" id="mnStD" value="' + lkToday() + '"/></div>' +
       '<div class="ap-f mn-stnew" style="display:none;flex:2"><label>Note (optional)</label><input type="text" id="mnStN" placeholder="e.g. reason returned"/></div>' +
       '<div class="mn-sthint">Changing the Status adds a dated step to the Status trail when you click Save.</div></div>' : '') +
