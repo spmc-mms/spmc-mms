@@ -3877,7 +3877,7 @@ async function poSubmit(){
   if (PO_EUS.indexOf(eu) === -1){ poMsg(poAreaUnit(cat) ? 'Please pick the Area of Assignment from the list.' : 'Please pick the End User from the list.', 'err'); return; }
   if (poAreaUnit(cat) && !eun){ poMsg('Please select the End-User (name of the person).', 'err'); return; }
   if (!v('poNumber')){ poMsg('PO Number is required.', 'err'); return; }
-  if (/["\r\n]/.test(v('poNumber')) || v('poNumber').length > 40){ poMsg('The PO Number looks wrong (quotes, line breaks or too long) — type only the PO number, e.g. 2026-10-1234.', 'err'); return; }
+  if (/["\r\n,]/.test(v('poNumber')) || !/\d/.test(v('poNumber')) || v('poNumber').length > 40){ poMsg('The PO Number looks wrong — it must be only the PO number, e.g. 2026-10-1234 (no description, quotes or commas).', 'err'); return; }
   if (!v('poDate')){ poMsg('PO Date is required.', 'err'); return; }
   if (PO_SUPS.indexOf(sup) === -1){ poMsg('Please pick the Supplier from the list.', 'err'); return; }
   if (!v('poSrd')){ poMsg('Date PO Received by Supplier is required.', 'err'); return; }
