@@ -1076,6 +1076,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <button class="btn btn-load" onclick="ptLoad()">↻ Refresh</button>
     </div>
   </div>
+  <div id="ptChecks"></div>
   <div class="pt-tabs" id="ptTabs"></div>
   <div id="ptPanels"><div class="pt-panel"><div class="pt-empty">Loading…</div></div></div>
 
@@ -2928,32 +2929,53 @@ function rcPreviewIar(){
   var d = rcFormIarData(); if (!d) return;
   rcShowIar(d);
 }
+// IAR window — on top of every page (Receive, Approvals, PO Trail …); the preview is the same page that is printed
+function iarWin_(){
+  var mo = document.getElementById('iarMo');
+  if (!mo){
+    mo = document.createElement('div'); mo.id = 'iarMo';
+    mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:3000';
+    mo.innerHTML = '<div style="background:#fff;border-radius:12px;padding:14px 16px;width:min(980px,96vw);height:92vh;display:flex;flex-direction:column">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="color:#1a3a5c;font-size:1.05rem">🖨️ IAR Preview</b><span id="iarMoTag"></span><span style="flex:1"></span>' +
+      '<button class="btn btn-prn btn-sm" onclick="rcPrintIar()">🖨️ Print</button><button class="btn btn-out btn-sm" onclick="rcCloseIar()">✕ Close</button></div>' +
+      '<div id="iarMoNote"></div><iframe id="iarMoFrame" style="flex:1;width:100%;border:1px solid #e2e8f0;border-radius:6px;background:#fff"></iframe></div>';
+    mo.addEventListener('click', function(e){ if (e.target === mo) rcCloseIar(); });
+    document.body.appendChild(mo);
+  }
+  return mo;
+}
+function rcCloseIar(){ var mo = document.getElementById('iarMo'); if (mo) mo.style.display = 'none'; }
+function iarWinShow_(html, note){
+  var mo = iarWin_(); mo.style.display = 'flex';
+  document.getElementById('iarMoNote').innerHTML = note || '';
+  var fr = document.getElementById('iarMoFrame'), doc = fr.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+}
+function iarDocHtml_(d){
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAR ' + esc(d.iarNo || d.poNo || '') + '</title><style>' + IAR_PRINT_CSS +
+    ' body{background:#fff} </style></head><body>' + mdyText(renderIarTemplate(d)) + '</body></html>';
+}
 function rcShowIar(d){
   RC_LAST_IAR = d;
-  document.getElementById('rcIarContent').innerHTML = (d.unit === 'NSCM' ? '<div style="background:#fff3a6;border:2px solid #e0c200;color:#6b5600;font-weight:800;text-align:center;padding:10px;border-radius:8px;margin-bottom:10px">🟨 NSCM — PLEASE PRINT ON YELLOW BOND PAPER</div>' : '') + renderIarTemplate(d);
-  document.getElementById('rcMoIar').classList.add('show');
-  var md = document.querySelector('#rcMoIar .md'); if (md) md.scrollTop = 0;
+  try {
+    iarWinShow_(iarDocHtml_(d), d.unit === 'NSCM' ? '<div style="background:#fff3a6;border:2px solid #e0c200;color:#6b5600;font-weight:800;text-align:center;padding:8px;border-radius:8px;margin-bottom:8px">🟨 NSCM — PLEASE PRINT ON YELLOW BOND PAPER</div>' : '');
+  } catch(e){ iarWinShow_('<p style="font-family:sans-serif;color:#c62828;padding:30px">Could not show the IAR: ' + esc(e.message) + '</p>'); }
 }
 function rcPrintIar(){
   if (!RC_LAST_IAR){ alert('The IAR is still loading — wait a moment, then click Print again.'); return; }
   if (RC_LAST_IAR.unit === 'NSCM' && !confirm('🟨 PLEASE PRINT ON YELLOW BOND PAPER\n\nThis is an NSCM IAR. Load yellow bond paper in the printer, then click OK.')) return;
-  var fr = document.getElementById('iarPrintFrame');
-  if (!fr){ fr = document.createElement('iframe'); fr.id = 'iarPrintFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(fr); }
-  var doc = fr.contentWindow.document;
-  doc.open();
-  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAR ' + esc(RC_LAST_IAR.iarNo || RC_LAST_IAR.poNo || '') + '</title><style>' + IAR_PRINT_CSS + '</style></head><body>' + mdyText(renderIarTemplate(RC_LAST_IAR)) + '</body></html>');
-  doc.close();
-  setTimeout(function(){ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ alert('Could not open the print window: ' + e.message); } }, 400);
+  var fr = document.getElementById('iarMoFrame');
+  if (!fr || document.getElementById('iarMo').style.display === 'none'){ rcShowIar(RC_LAST_IAR); fr = document.getElementById('iarMoFrame'); }
+  setTimeout(function(){ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ alert('Could not open the print window: ' + e.message); } }, 300);
 }
 
 async function rcIarFromLog(receiveId){
   RC_LAST_IAR = null;
-  document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#777">⏳ Loading IAR ' + esc(receiveId) + '…</div>';
-  document.getElementById('rcMoIar').classList.add('show');
-  var md0 = document.querySelector('#rcMoIar .md'); if (md0) md0.scrollTop = 0;
+  var wait = function(t, red){ iarWinShow_('<p style="font-family:sans-serif;padding:40px;text-align:center;color:' + (red ? '#c62828' : '#777') + '">' + t + '</p>'); };
+  wait('⏳ Loading IAR ' + esc(receiveId) + '…');
   try {
     var rows = await fetchAll(function(){ return sb.from('v_receipt_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id'); });
-    if (!rows.length){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Receipt ' + esc(receiveId) + ' was not found.</div>'; return; }
+    if (!rows.length){ wait('Receipt ' + esc(receiveId) + ' was not found.', true); return; }
     var r0 = rows[0];
     var iar = await fetchAll(function(){ return sb.from('v_iar_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id').order('part_id'); });
     var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name,end_user').eq('po_number', r0.po_number).maybeSingle();
@@ -2970,7 +2992,7 @@ async function rcIarFromLog(receiveId){
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
       dateRec: r0.date, loc: r0.location, reqOff: reqOff, unit: r0.category || (po.data ? po.data.category : ''), poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
       items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '' }; })) });
-  } catch(e){ document.getElementById('rcIarContent').innerHTML = '<div style="padding:40px;text-align:center;color:#c62828">Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.</div>'; }
+  } catch(e){ wait('Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.', true); }
 }
 
 // ── SAVE ────────────────────────────────────────────────────────────────────
@@ -4504,6 +4526,7 @@ async function ptLoad(quiet){
     try { PT_NOA = {}; (await fetchAll(function(){ return sb.from('po_headers').select('po_number,noa_number').order('po_number'); })).forEach(function(h){ if (h.noa_number) PT_NOA[ptKey(h.po_number)] = String(h.noa_number).trim(); }); } catch(eN){}
     if (PT_TABS.some(function(t){ return t.key === 'summary'; })) await ptAsLoad();
     try { PT_DOCS = await fetchAll(function(){ return sb.from('v_po_documents').select('id,doc_type,date_received,po_number,matched_po,new_deadline,note').not('matched_po', 'is', null).order('date_received').order('id'); }); } catch(e2){ PT_DOCS = []; }
+    ptChecksLoad();
     document.getElementById('ptUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     if (!quiet || !ptBusy()) ptRender();
   } catch(e){
@@ -4512,6 +4535,38 @@ async function ptLoad(quiet){
     }
   }
 }
+
+// ⚠ receipts to check (nothing is changed unless the Approver clicks a button)
+var PT_CHECKS = [], PT_CHECKS_OPEN = false;
+async function ptChecksLoad(){
+  try { PT_CHECKS = await fetchAll(function(){ var q = sb.from('v_receipt_checks').select('*'); if (myUnits()) q = q.in('unit', myUnits()); return q.order('po_number'); }); }
+  catch(e){ PT_CHECKS = []; }
+  ptChecksRender();
+}
+function ptChecksRender(){
+  var el = document.getElementById('ptChecks'); if (!el) return;
+  if (!PT_CHECKS.length){ el.innerHTML = ''; return; }
+  var can = ME.role === 'Approver' || ME.role === 'Admin';
+  var what = { 'NO TRAIL': 'Received but not on the PO Status Trail', 'DELIVERED IS LOWER': 'The PO shows less delivered than its receipts',
+    'DELIVERED IS HIGHER': 'The PO shows MORE delivered than its receipts', 'NO PO ITEM': 'Receipt item not linked to a PO item' };
+  el.innerHTML = '<div style="background:#fff8e6;border:1px solid #f0c36d;border-radius:10px;padding:10px 14px;margin:0 0 12px;font-size:.86rem">' +
+    '<b>⚠ ' + PT_CHECKS.length + ' receipt item(s) to check</b> — the system did not change these; please look at them. ' +
+    '<a href="#" onclick="event.preventDefault();PT_CHECKS_OPEN=!PT_CHECKS_OPEN;ptChecksRender()">' + (PT_CHECKS_OPEN ? 'Hide' : 'Show the list') + '</a>' +
+    (PT_CHECKS_OPEN ? '<table class="pt-table" style="margin-top:8px"><thead><tr><th>Check</th><th>PO No.</th><th>Receive ID</th><th>What</th><th></th></tr></thead><tbody>' +
+      PT_CHECKS.map(function(c){
+        var btn = c.kind === 'NO TRAIL' && can ? '<button class="pt-btn pt-indigo" onclick="ptTrailAdd(\'' + esc(c.receive_id) + '\')">➕ Put on PO Trail</button>'
+          : '<button class="pt-btn pt-gray" onclick="' + (c.receive_id ? 'ptGoRcv(\'' + esc(c.receive_id) + '\')' : 'ptGoPo(\'' + esc(c.po_number) + '\')') + '">Open</button>';
+        return '<tr><td><b>' + esc(what[c.kind] || c.kind) + '</b></td><td>' + esc(c.po_number || '') + '</td><td>' + esc(c.receive_id || '—') + '</td><td>' + esc(c.note || '') + '</td><td>' + btn + '</td></tr>';
+      }).join('') + '</tbody></table>' : '') + '</div>';
+}
+async function ptTrailAdd(rid){
+  if (!confirm('Put ' + rid + ' on the PO Status Trail (FOR IAR)?')) return;
+  var r = await sb.rpc('apv_trail_add', { p_receive_id: rid });
+  if (r.error){ ptToast(errText(r.error), true); return; }
+  ptToast(rid + ' is now on the PO Status Trail (FOR IAR).'); ptLoad();
+}
+function ptGoRcv(rid){ if (!['Approver','Admin'].includes(ME.role)) { ptToast('Ask the Approver to open ' + rid + ' in Approvals → Receive / IAR.', true); return; } showPage('approvals'); setTimeout(function(){ apRcvGo(rid); }, 400); }
+function ptGoPo(po){ if (!['Approver','Admin'].includes(ME.role)) { ptToast('Ask the Approver to open PO ' + po + ' in Approvals → PO.', true); return; } showPage('approvals'); setTimeout(function(){ apTodoOpen(po); }, 400); }
 
 // Latest status change first: the newest of the trail's own update time and its stage dates
 function ptStamp(e){
@@ -5100,6 +5155,7 @@ var TODO_ROWS = [], TODO_SHOW = 'OPEN', TODO_UNIT = '';
 async function apTodoView(){
   var body = document.getElementById('apBody');
   body.innerHTML = '<div class="ap-empty">Loading…</div>';
+  try { await sb.rpc('receipt_todos_sync'); } catch(e){}     // ⚠ receipt checks → To Do (update 68)
   try {
     TODO_ROWS = await fetchAll(function(){ var q = sb.from('approver_todos').select('*'); var u = myUnits(); if (u) q = q.in('unit', u);
       return q.order('status', { ascending: false }).order('unit').order('po_number').order('id'); });
@@ -5338,6 +5394,8 @@ async function apBegSaveAdd(){
   apMsg('ok', '✅ Batch added — on the Stock Card as BEG. BAL. ADJUSTMENT.');
   BEG_ADD = false; BEG_Q = apVal('begAC').split(' — ')[0].trim(); await apBegView();
 }
+// open a receipt (RCV-…) in Approvals → Receive / IAR
+function apRcvGo(id){ apSwitch('rcv'); var k = document.getElementById('apKey'); if (k) k.value = id; apRcvOpen(id); }
 function apTodoOpen(po){ apSwitch('po'); var k = document.getElementById('apKey'); if (k) k.value = po; apPoOpen(po); }
 async function apTodoSet(id, done){
   var r = await sb.rpc('todo_set_done', { p_id: id, p_done: done, p_note: done ? (apVal('tdN' + id) || null) : null });
@@ -5363,7 +5421,6 @@ async function apInit(){
   document.querySelector('#apMain .topbar h1').textContent = ME.role === 'Encoder' ? '📚 Master Lists' : ME.role === 'Admin' ? '📚 Master Lists & Edit Log' : '✅ Approvals';
   document.getElementById('apRoleNote').textContent = ME.role === 'Encoder' ? 'Encoder — add and edit suppliers, end users, item codes and locations (delete is for the Approver / Admin); every change is logged'
     : AP_RO ? 'Admin — Master Lists (add, edit and delete suppliers, end users, item codes, locations) and the Edit Log. Approvals are done by the Approvers.' : 'Approver — direct edits; every change is logged';
-  var iar = document.getElementById('rcMoIar'); if (iar && iar.parentNode !== document.body) document.body.appendChild(iar);
   document.getElementById('apTabs').innerHTML = tabs.map(function(t){
     return '<button class="subtab-btn" id="apTab_' + t[0] + '" onclick="apSwitch(\'' + t[0] + '\')">' + t[1] + '</button>';
   }).join('');
@@ -5520,7 +5577,11 @@ function apPoRender(){
           PO_CATEGORIES.map(function(c){ return '<option' + ((l.line_unit || h.category) === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div></td>' +
       '<td><input type="number" min="0" id="apPlQ' + l.po_line_id + '" value="' + l.qty_ordered + '"/></td><td>' + l.qty_delivered + '</td>' +
       '<td><input type="number" min="0" id="apPlC' + l.po_line_id + '" value="' + l.qty_cancelled + '"/></td>' +
-      '<td><input type="number" min="0" step="0.01" id="apPlU' + l.po_line_id + '" value="' + l.unit_cost + '"/></td><td>' + l.balance + '</td><td>' + esc(l.delivery_status) + '</td>' +
+      '<td><input type="number" min="0" step="0.01" id="apPlU' + l.po_line_id + '" value="' + l.unit_cost + '"/></td><td>' + l.balance + '</td><td>' + esc(l.delivery_status) +
+        ((c.rcvByLine[l.po_line_id] || []).length
+          ? '<div style="margin-top:3px;font-size:.74rem;line-height:1.5">' + c.rcvByLine[l.po_line_id].map(function(x){
+              return '<a href="#" title="Open this receipt in Receive / IAR" onclick="event.preventDefault();apRcvGo(\'' + esc(x.id) + '\')"><b>' + esc(x.id) + '</b></a> <span class="ap-ro">' + esc(toMDY(x.d) || '') + (x.iar ? ' · IAR ' + esc(x.iar) : '') + '</span>'; }).join('<br>') + '</div>'
+          : '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#b9770e">NO DELIVERY YET</div>') + '</td>' +
       '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') +
         (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') + '</td></tr>';
     var fg = c.free[l.po_line_id];
