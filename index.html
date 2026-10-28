@@ -1256,7 +1256,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <p style="font-size:.85rem;color:#555;margin:-6px 0 10px">List every piece inside this LOT. These pieces (not the LOT) are what go to stock, the stock card and the IAR. Type a new description or pick one already used.</p>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;font-size:.88rem">
         <label style="font-weight:600">No. of LOT received</label>
-        <input type="number" id="rcBrkLotQty" min="0" step="1" style="width:90px"/>
+        <input type="number" id="rcBrkLotQty" min="0" step="1" style="width:90px" oninput="rcBrkTotal()"/>
         <span id="rcBrkBal" style="color:#777"></span>
       </div>
       <div style="max-height:46vh;overflow:auto">
@@ -1265,6 +1265,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
           <tbody id="rcBrkBody"></tbody>
         </table>
       </div>
+      <div id="rcBrkTot" style="margin-top:8px"></div>
       <button type="button" class="btn btn-out btn-sm" style="margin-top:8px" onclick="rcBrkAdd()">＋ Add piece</button>
       <div id="rcBrkErr" style="display:none;color:#c62828;font-size:.85rem;margin-top:8px"></div>
       <div class="md-act">
@@ -2846,8 +2847,23 @@ function rcBrkRender(){
         : '<td><input type="date" value="' + esc(p.exp) + '" onchange="rcBrkSet(' + i + ',\'exp\',this.value)"/></td>') +
       '<td><button type="button" class="btn btn-del btn-sm" onclick="rcBrkDel(' + i + ')">✕</button></td></tr>';
   }).join('');
+  rcBrkTotal();
 }
-function rcBrkSet(i, f, v){ RC_BRK.parts[i][f] = v; }
+function rcBrkSet(i, f, v){ RC_BRK.parts[i][f] = v; if (f === 'qty' || f === 'cost') rcBrkTotal(); }
+// total of the breakdown (qty × unit cost) vs the PO amount of the LOT — for checking only, not on the IAR
+function rcBrkTotal(){
+  var el = document.getElementById('rcBrkTot'); if (!el || !RC_BRK) return;
+  var r = RC_ROWS.filter(function(x){ return x.key === RC_BRK.key; })[0] || {};
+  var P = function(v){ return '₱' + (Number(v) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var tot = RC_BRK.parts.reduce(function(a, p){ return a + (Number(p.qty) || 0) * (Number(p.cost) || 0); }, 0);
+  var lots = Number(document.getElementById('rcBrkLotQty').value) || 0, po = lots * (Number(r.cost) || 0), diff = Math.round((tot - po) * 100) / 100;
+  var ok = Math.abs(diff) < 0.005;
+  el.innerHTML = '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:8px 12px;border-radius:8px;font-size:.88rem;background:' + (ok ? '#eafaf1;border:1px solid #a9dfbf' : '#fff8e6;border:1px solid #f0c36d') + '">' +
+    '<span>Total of the breakdown: <b>' + P(tot) + '</b></span>' +
+    '<span>PO amount (' + lots + ' LOT × ' + P(r.cost) + '): <b>' + P(po) + '</b></span>' +
+    '<span style="font-weight:700;color:' + (ok ? '#1e8449' : '#b9770e') + '">' + (ok ? '✅ Match' : '⚠ Difference ' + (diff > 0 ? '+' : '−') + P(Math.abs(diff))) + '</span>' +
+    '<span style="color:#888;font-size:.78rem">for checking only — not on the IAR</span></div>';
+}
 // EQUIPMENT: serial number instead of expiry, and a new code can be typed (added to Item Codes on Save)
 function rcBrkSn_(){ return RC_CAT === 'EQUIPMENT'; }
 // a code typed / picked → its description and unit come from the item list (unit cost and qty are typed)
