@@ -5152,7 +5152,7 @@ function apLock(){
 }
 
 function apTabsFor(){
-  var all = [['todo','📝 To Do'],['beg','📦 Beg. Balance'],['po','📋 PO'],['rcv','📥 Receive / IAR'],['ris','📤 Issuance (RIS)'],['rsmi','🧾 RSMI'],['xfer','🔁 Transfer of Item'],['master','📚 Master Lists'],['delpo','🗑 Deleted POs'],['log','🕘 Edit Log']];
+  var all = [['todo','📝 To Do'],['beg','📦 Beg. Balance'],['po','📋 PO'],['pobeg','📦 PO Beg. Balance'],['rcv','📥 Receive / IAR'],['ris','📤 Issuance (RIS)'],['rsmi','🧾 RSMI'],['xfer','🔁 Transfer of Item'],['master','📚 Master Lists'],['delpo','🗑 Deleted POs'],['log','🕘 Edit Log']];
   if (ME.role === 'Approver') return all;
   if (ME.role === 'Admin') return [['master','📚 Master Lists'],['log','🕘 Edit Log']];   // approvals are for the Approvers only
   if (ME.role === 'Encoder') return [['master','📚 Master Lists']];
@@ -5428,6 +5428,61 @@ async function apBegSaveAdd(){
   apMsg('ok', '✅ Batch added — on the Stock Card as BEG. BAL. ADJUSTMENT.');
   BEG_ADD = false; BEG_Q = apVal('begAC').split(' — ')[0].trim(); await apBegView();
 }
+// "Delivered before the app" of a PO item (dating app / old monitoring) — no RCV, no IAR
+function apPoLegCell_(l){
+  var g = (AP_CUR.legacy || {})[l.po_line_id]; if (!g) return '';
+  var lg = apNum(g.legacy_delivered), rc = apNum(g.received_in_app);
+  return '<div style="font-size:.7rem;color:#5d6d7e;margin-top:3px;white-space:nowrap">before the app ' +
+    (ME.role === 'Approver' ? '<input type="number" min="0" step="any" id="apPlL' + l.po_line_id + '" value="' + lg + '" style="width:70px;padding:2px 4px;font-size:.75rem"/> ' +
+      '<button class="ap-btn sm gray" style="padding:2px 6px" title="Save the delivered before the app" onclick="apPoLegSave(' + l.po_line_id + ', \'po\')">💾</button>' : '<b>' + lg + '</b>') +
+    '<br>+ RCV ' + rc + '</div>';
+}
+async function apPoLegSave(id, from){
+  var q = apVal((from === 'po' ? 'apPlL' : 'pbQ') + id), note = from === 'po' ? '' : apVal('pbN' + id);
+  if (q === '' || isNaN(Number(q))){ apMsg('err', 'Type the qty delivered before the app (0 if none).'); return; }
+  var r = await sb.rpc('apv_po_legacy', { p_line_id: id, p_qty: Number(q), p_note: note });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_po_legacy/.test(errText(r.error)) ? ' — has update 71 been run?' : '')); return; }
+  apMsg('ok', '✅ Saved — delivered is now ' + r.data.delivered + ' (before the app ' + q + ' + RCV ' + r.data.received_in_app + ').');
+  if (from === 'po') return apPoOpen(AP_CUR.h.po_number);
+  return apPoBegRows();
+}
+// ── 📦 PO Beg. Balance: what each PO item got before the app ─────────────────
+var PB_ROWS = [], PB_Q = '', PB_SHOW = 'LEG', PB_UNIT = '';
+async function apPoBegView(){
+  var body = document.getElementById('apBody'); body.innerHTML = '<div class="ap-empty">Loading…</div>';
+  try { PB_ROWS = await fetchAll(function(){ var q = sb.from('v_po_beg_balance').select('*'); var u = myUnits(); if (u) q = q.in('unit', u); return q.order('po_number').order('po_line_id'); }); }
+  catch(e){ body.innerHTML = '<div class="ap-empty">⚠ ' + esc(errText(e)) + ' — has update 71 been run?</div>'; return; }
+  var units = sopUniq(PB_ROWS.map(function(r){ return r.unit; })).sort();
+  body.innerHTML = '<div class="sx-card"><div class="sx-h">📦 PO Beginning Balance — delivered before the app</div>' +
+    '<p class="sx-hint" style="margin:0 0 10px">What each PO item got <b>before the app</b> (dating app / old monitoring). No RCV, no IAR number, no stock card — it only counts in the PO\'s delivered qty: <b>Delivered = before the app + RCV in the app</b>. Every change is in the Edit Log.</p>' +
+    '<div class="ap-search"><input type="text" placeholder="Search PO, supplier, item…" value="' + esc(PB_Q) + '" oninput="PB_Q=this.value;apPoBegRows()"/>' +
+      '<select onchange="PB_SHOW=this.value;apPoBegRows()"><option value="LEG"' + (PB_SHOW === 'LEG' ? ' selected' : '') + '>With delivery before the app</option><option value="OPEN"' + (PB_SHOW === 'OPEN' ? ' selected' : '') + '>Items with a balance</option><option value="ALL"' + (PB_SHOW === 'ALL' ? ' selected' : '') + '>All PO items</option></select>' +
+      (units.length > 1 ? '<select onchange="PB_UNIT=this.value;apPoBegRows()"><option value="">All units</option>' + units.map(function(u){ return '<option' + (PB_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>' : '') +
+      '<button class="sx-btn blue sm" onclick="apPoBegView()">↻ Refresh</button></div><div id="pbRows"></div></div>';
+  apPoBegRows();
+}
+function apPoBegRows(){
+  var el = document.getElementById('pbRows'); if (!el) return;
+  var q = PB_Q.trim().toLowerCase();
+  var rows = PB_ROWS.filter(function(r){
+    if (PB_UNIT && r.unit !== PB_UNIT) return false;
+    if (PB_SHOW === 'LEG' && !(apNum(r.legacy_delivered) > 0)) return false;
+    if (PB_SHOW === 'OPEN' && !(apNum(r.balance) > 0)) return false;
+    return !q || [r.po_number, r.supplier, r.item_code, r.description].join(' ').toLowerCase().indexOf(q) !== -1; });
+  var shown = rows.slice(0, 300);
+  el.innerHTML = '<p class="sx-hint">' + rows.length + ' PO item(s)' + (rows.length > 300 ? ' — showing 300; search to narrow it down' : '') + '</p>' + (rows.length ?
+    '<div class="ap-scroll" style="max-height:620px"><table class="ap-tbl"><thead><tr><th>PO No.</th><th>Unit</th><th>Supplier</th><th>Item</th><th class="r">Ordered</th><th class="r">Before the app</th><th class="r">+ RCV in app</th><th class="r">= Delivered</th><th class="r">Cancelled</th><th class="r">Balance</th><th>Note</th><th></th></tr></thead><tbody>' +
+    shown.map(function(r){ var id = r.po_line_id;
+      return '<tr><td class="nw"><a href="#" onclick="event.preventDefault();apTodoOpen(\'' + esc(r.po_number) + '\')"><b>' + esc(r.po_number) + '</b></a><div class="ap-ro">' + esc(r.overall_status || '') + '</div></td>' +
+        '<td class="nw"><span class="pt-cat">' + esc(r.unit || '') + '</span></td><td style="max-width:180px">' + esc(r.supplier || '') + '</td>' +
+        '<td style="max-width:280px">' + (r.item_code && r.item_code.indexOf('AUTO-') !== 0 ? '<b>' + esc(r.item_code) + '</b> ' : '') + esc(r.description || '') + '<div class="ap-ro">' + esc(r.uom || '') + '</div></td>' +
+        '<td class="r">' + r.qty_ordered + '</td>' +
+        '<td class="r">' + (ME.role === 'Approver' ? '<input type="number" min="0" step="any" id="pbQ' + id + '" value="' + apNum(r.legacy_delivered) + '" style="width:80px;text-align:right"/>' : apNum(r.legacy_delivered)) + '</td>' +
+        '<td class="r">' + apNum(r.received_in_app) + '</td><td class="r"><b>' + r.qty_delivered + '</b></td><td class="r">' + r.qty_cancelled + '</td><td class="r">' + r.balance + '</td>' +
+        '<td>' + (ME.role === 'Approver' ? '<input type="text" id="pbN' + id + '" value="' + esc(r.legacy_note || '') + '" placeholder="e.g. DR date, old app" style="width:150px"/>' : esc(r.legacy_note || '')) + '</td>' +
+        '<td>' + (ME.role === 'Approver' ? '<button class="sx-btn green sm" onclick="apPoLegSave(' + id + ')">💾 Save</button>' : '') + '</td></tr>'; }).join('') +
+    '</tbody></table></div>' : '<div class="ap-empty">Nothing here.</div>');
+}
 // open a receipt (RCV-…) in Approvals → Receive / IAR
 function apRcvGo(id){ apSwitch('rcv'); var k = document.getElementById('apKey'); if (k) k.value = id; apRcvOpen(id); }
 function apTodoOpen(po){ apSwitch('po'); var k = document.getElementById('apKey'); if (k) k.value = po; apPoOpen(po); }
@@ -5486,6 +5541,7 @@ function apSwitch(t){
   if (t === 'master') apMasterView('supplier');
   if (t === 'todo')   apTodoView();
   if (t === 'beg')    apBegView();
+  if (t === 'pobeg')  apPoBegView();
   if (t === 'delpo')  apDelPoView();
   if (t === 'log')    apLogView();
   if (t === 'po')   apFillList('apPoList', 'po_headers', 'po_number');
@@ -5528,7 +5584,9 @@ async function apPoOpen(key){
     var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,po_line_id,date,iar_no').eq('po_number', po).order('date').order('receive_id'); });
     var rcvByLine = {}; rl.forEach(function(x){ if (!x.po_line_id) return; var a = rcvByLine[x.po_line_id] = rcvByLine[x.po_line_id] || [];
       if (!a.some(function(y){ return y.id === x.receive_id; })) a.push({ id: x.receive_id, d: x.date, iar: x.iar_no }); });
-    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {} };
+    var legacy = {}; try { (await fetchAll(function(){ return sb.from('v_po_beg_balance').select('po_line_id,legacy_delivered,legacy_note,received_in_app').eq('po_number', po).order('po_line_id'); }))
+      .forEach(function(x){ legacy[x.po_line_id] = x; }); } catch(e){}
+    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {}, legacy: legacy };
     if (!PO_OPTS.MODE.length) await poLoadOpts();
     apPoRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
@@ -5609,7 +5667,7 @@ function apPoRender(){
       '<td><input type="text" list="apEuDl" id="apPlEu' + l.po_line_id + '" value="' + esc(l.end_user || '') + '"/>' +
         '<div class="ap-ro" style="font-size:.7rem;margin-top:3px">received by <select style="font-size:.72rem;padding:1px 4px;width:auto" onchange="apPoLineUnit(' + l.po_line_id + ',this)"' + (apNum(l.qty_delivered) > 0 ? ' disabled title="Has deliveries"' : '') + '>' +
           PO_CATEGORIES.map(function(c){ return '<option' + ((l.line_unit || h.category) === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div></td>' +
-      '<td><input type="number" min="0" id="apPlQ' + l.po_line_id + '" value="' + l.qty_ordered + '"/></td><td>' + l.qty_delivered + '</td>' +
+      '<td><input type="number" min="0" id="apPlQ' + l.po_line_id + '" value="' + l.qty_ordered + '"/></td><td>' + l.qty_delivered + apPoLegCell_(l) + '</td>' +
       '<td><input type="number" min="0" id="apPlC' + l.po_line_id + '" value="' + l.qty_cancelled + '"/></td>' +
       '<td><input type="number" min="0" step="0.01" id="apPlU' + l.po_line_id + '" value="' + l.unit_cost + '"/></td><td>' + l.balance + '</td><td>' + esc(l.delivery_status) +
         ((c.rcvByLine[l.po_line_id] || []).length
