@@ -6495,11 +6495,15 @@ async function rpRun(){
     if (t === 'postat'){
       var su4 = rpSU(), dl4 = apVal('rpDlv'), q4 = apVal('rpSearch').toLowerCase();
       var pl4 = await fetchAll(function(){ var q = sb.from('v_po_lines').select('po_line_id,po_number,category,supplier,po_date,item_code,po_description,trail_status,delivery_status,qty_ordered,qty_delivered,qty_cancelled,balance'); if (su4) q = q.eq('category', su4); return q.order('po_line_id'); });
+      var sop4 = await fetchAll(function(){ return sb.from('v_sop_monitoring').select('id,po_number,sop_status,updated_at').order('id'); }).catch(function(){ return []; }), rec4 = {};
+      sop4.forEach(function(r){ var k = String(r.po_number || '').trim().toUpperCase(); if (!k) return;
+        var o = rec4[k]; if (!o || (!o.id && r.id) || (!!r.id === !!o.id && String(r.updated_at || '') > String(o.updated_at || ''))) rec4[k] = r; });
+      var sopOf = function(l){ var r = rec4[String(l.po_number || '').trim().toUpperCase()]; return r ? (r.sop_status || '') : ''; };
       pl4 = pl4.filter(function(l){ return (!dl4 || l.delivery_status === dl4) && (!q4 || (l.po_number + ' ' + l.item_code + ' ' + (l.po_description || '')).toLowerCase().indexOf(q4) !== -1); });
       RP_CUR = { title: 'PO Items Status', sub: 'As of ' + toMDY(today) + rpSUText() + (dl4 ? ' · ' + dl4 : ''),
         kv: [['PO items', pl4.length], ['POs', sopUniq(pl4.map(function(l){ return l.po_number; })).length]],
-        sections: [{ cols: ['MMS_LINE_ID','PO No.','Unit','Supplier','PO Date','Code','Description','PO Status Trail','Delivery Status','Qty Ordered','Qty Delivered','Qty Cancelled','Balance'],
-          rows: pl4.map(function(l){ return [l.po_line_id, l.po_number, l.category, l.supplier, l.po_date ? toMDY(l.po_date) : '', l.item_code, l.po_description || '', l.trail_status, l.delivery_status,
+        sections: [{ cols: ['MMS_LINE_ID','PO No.','Unit','Supplier','PO Date','Code','Description','PO Status Trail','SOP Status','PO Status (app)','Delivery Status','Qty Ordered','Qty Delivered','Qty Cancelled','Balance'],
+          rows: pl4.map(function(l){ var so = sopOf(l); return [l.po_line_id, l.po_number, l.category, l.supplier, l.po_date ? toMDY(l.po_date) : '', l.item_code, l.po_description || '', l.trail_status, so, so || l.trail_status, l.delivery_status,
             Number(l.qty_ordered), Number(l.qty_delivered), Number(l.qty_cancelled), Number(l.balance)]; }) }] };
     }
     if (t === 'loc'){
