@@ -6295,7 +6295,7 @@ function rpView(){
       cls: s.cls ? keep.map(function(i){ return s.cls[i]; }) : null });
   }) });
 }
-var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['loc','Items per Location'],['inout','Per Item In / Out'],['rcvlist','Receiving List'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
+var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['loc','Items per Location'],['inout','Per Item In / Out'],['rcvlist','Receiving List'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status'],['postat','PO Items Status']];
 function rpMonthStart(){ var d = new Date(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function rpMsg(kind, t){ var b = document.getElementById('rpMsg'); b.className = 'ap-msg ' + (kind || ''); b.innerHTML = t || ''; }
 
@@ -6322,6 +6322,9 @@ function rpSwitch(t){
   if (t === 'reo') f = rpSUField();
   if (t === 'fast') f = rpSUField() + apField('From', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }) +
       '<div class="ap-f"><label>Top</label><select id="rpTop"><option>10</option><option selected>50</option><option>100</option><option>500</option></select></div>';
+  if (t === 'postat') f = rpSUField() +
+      '<div class="ap-f"><label>Delivery Status</label><select id="rpDlv"><option value="">All</option>' + apOpt(['NO DELIVERY','PARTIAL','COMPLETE','CANCELLED BALANCE','CANCELLED']) + '</select></div>' +
+      apField('Search PO / code / description', 'rpSearch', '');
   if (t === 'loc'){ var L = (AP_LISTS && AP_LISTS.loc) || [];
     f = rpSUField() +
       '<div class="ap-f"><label>Building</label><select id="rpBldg"><option value="">All buildings</option>' + apOpt(sopUniq(L.map(function(x){ return x.building; })).sort()) + '</select></div>' +
@@ -6488,6 +6491,16 @@ async function rpRun(){
       RP_CUR = { title: 'Fast-Moving Items', sub: apVal('rpFrom') + ' to ' + apVal('rpTo') + rpSUText(), kv: [],
         sections: [{ cols: ['Rank','Code','Description','Unit','Qty Issued','No. of RIS','No. of End Users'],
           rows: (ff.data || []).map(function(x, i){ return [i + 1, x.code, x.desc, x.unit, x.qty, x.ris_count, x.end_users]; }) }] };
+    }
+    if (t === 'postat'){
+      var su4 = rpSU(), dl4 = apVal('rpDlv'), q4 = apVal('rpSearch').toLowerCase();
+      var pl4 = await fetchAll(function(){ var q = sb.from('v_po_lines').select('po_line_id,po_number,category,supplier,po_date,item_code,po_description,trail_status,delivery_status,qty_ordered,qty_delivered,qty_cancelled,balance'); if (su4) q = q.eq('category', su4); return q.order('po_line_id'); });
+      pl4 = pl4.filter(function(l){ return (!dl4 || l.delivery_status === dl4) && (!q4 || (l.po_number + ' ' + l.item_code + ' ' + (l.po_description || '')).toLowerCase().indexOf(q4) !== -1); });
+      RP_CUR = { title: 'PO Items Status', sub: 'As of ' + toMDY(today) + rpSUText() + (dl4 ? ' · ' + dl4 : ''),
+        kv: [['PO items', pl4.length], ['POs', sopUniq(pl4.map(function(l){ return l.po_number; })).length]],
+        sections: [{ cols: ['MMS_LINE_ID','PO No.','Unit','Supplier','PO Date','Code','Description','PO Status Trail','Delivery Status','Qty Ordered','Qty Delivered','Qty Cancelled','Balance'],
+          rows: pl4.map(function(l){ return [l.po_line_id, l.po_number, l.category, l.supplier, l.po_date ? toMDY(l.po_date) : '', l.item_code, l.po_description || '', l.trail_status, l.delivery_status,
+            Number(l.qty_ordered), Number(l.qty_delivered), Number(l.qty_cancelled), Number(l.balance)]; }) }] };
     }
     if (t === 'loc'){
       var su3 = rpSU(), bl = apVal('rpBldg'), lc = apVal('rpLoc'), per = apVal('rpPerson'), q3 = apVal('rpSearch').toLowerCase(), view = apVal('rpLocView');
