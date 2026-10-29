@@ -6295,7 +6295,7 @@ function rpView(){
       cls: s.cls ? keep.map(function(i){ return s.cls[i]; }) : null });
   }) });
 }
-var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['inout','Per Item In / Out'],['rcvlist','Receiving List'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
+var RP_TABS = [['summary','Summary'],['card','Stock Card'],['inv','Inventory on Hand'],['loc','Items per Location'],['inout','Per Item In / Out'],['rcvlist','Receiving List'],['exp','Expiry'],['reo','Reorder Level'],['fast','Fast Moving'],['month','Receipts vs Issuances'],['po','PO Status']];
 function rpMonthStart(){ var d = new Date(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function rpMsg(kind, t){ var b = document.getElementById('rpMsg'); b.className = 'ap-msg ' + (kind || ''); b.innerHTML = t || ''; }
 
@@ -6322,6 +6322,13 @@ function rpSwitch(t){
   if (t === 'reo') f = rpSUField();
   if (t === 'fast') f = rpSUField() + apField('From', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }) +
       '<div class="ap-f"><label>Top</label><select id="rpTop"><option>10</option><option selected>50</option><option>100</option><option>500</option></select></div>';
+  if (t === 'loc'){ var L = (AP_LISTS && AP_LISTS.loc) || [];
+    f = rpSUField() +
+      '<div class="ap-f"><label>Building</label><select id="rpBldg"><option value="">All buildings</option>' + apOpt(sopUniq(L.map(function(x){ return x.building; })).sort()) + '</select></div>' +
+      '<div class="ap-f"><label>Location</label><select id="rpLoc"><option value="">All locations</option>' + apOpt(L.map(function(x){ return x.location; })) + '</select></div>' +
+      '<div class="ap-f"><label>Assigned person</label><select id="rpPerson"><option value="">Everyone</option>' + apOpt(sopUniq(L.map(function(x){ return x.assigned_person; })).sort()) + '</select></div>' +
+      '<div class="ap-f"><label>View</label><select id="rpLocView"><option value="item">Per item (total per location)</option><option value="lot">Per batch (expiry, brand, batch #)</option></select></div>' +
+      apField('Search code / description', 'rpSearch', ''); }
   if (t === 'inout') f = rpSUField() + apField('From', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }) + apField('Search code / description', 'rpSearch', '') +
       '<div class="ap-f"><label>Show</label><select id="rpIoShow"><option value="">All items</option><option value="MOVE">With receipts or issuances in the period</option><option value="DIFF">Only where on hand ≠ expected</option></select></div>';
   if (t === 'rcvlist') f = rpSUField() + apField('Date Received from', 'rpFrom', rpMonthStart(), { type: 'date' }) + apField('to', 'rpTo', today, { type: 'date' }) +
@@ -6481,6 +6488,29 @@ async function rpRun(){
       RP_CUR = { title: 'Fast-Moving Items', sub: apVal('rpFrom') + ' to ' + apVal('rpTo') + rpSUText(), kv: [],
         sections: [{ cols: ['Rank','Code','Description','Unit','Qty Issued','No. of RIS','No. of End Users'],
           rows: (ff.data || []).map(function(x, i){ return [i + 1, x.code, x.desc, x.unit, x.qty, x.ris_count, x.end_users]; }) }] };
+    }
+    if (t === 'loc'){
+      var su3 = rpSU(), bl = apVal('rpBldg'), lc = apVal('rpLoc'), per = apVal('rpPerson'), q3 = apVal('rpSearch').toLowerCase(), view = apVal('rpLocView');
+      var LM = {}; ((AP_LISTS && AP_LISTS.loc) || []).forEach(function(x){ LM[x.location] = x; });
+      var lots3 = await fetchAll(function(){ var q = sb.from('v_inventory_lots').select('id,item_code,description,unit,stock_unit,location,expiry_date,qty_on_hand'); if (su3) q = q.eq('stock_unit', su3); return q.order('location').order('item_code').order('expiry_date', { ascending: true, nullsFirst: false }); });
+      var brand3 = view === 'lot' ? await rpLotBrands_() : {};
+      lots3 = lots3.filter(function(l){ var m = LM[l.location] || {};
+        return Number(l.qty_on_hand) > 0 && (!bl || m.building === bl) && (!lc || l.location === lc) && (!per || m.assigned_person === per) &&
+          (!q3 || (l.item_code + ' ' + l.description).toLowerCase().indexOf(q3) !== -1); });
+      var key3 = function(l){ return (l.stock_unit || '') + '|' + (l.location || '—') + '|' + l.item_code; }, G = {}, order3 = [];
+      lots3.forEach(function(l){ var k = key3(l); if (!G[k]){ G[k] = { l: l, q: 0, n: 0, exp: null }; order3.push(k); } var g = G[k]; g.q += Number(l.qty_on_hand); g.n++; if (l.expiry_date && (!g.exp || l.expiry_date < g.exp)) g.exp = l.expiry_date; });
+      var locSum = {}, locOrder = [];
+      lots3.forEach(function(l){ var k = (l.stock_unit || '') + '|' + (l.location || '—'); if (!locSum[k]){ locSum[k] = { u: l.stock_unit, loc: l.location || '—', items: {}, q: 0 }; locOrder.push(k); } locSum[k].items[l.item_code] = 1; locSum[k].q += Number(l.qty_on_hand); });
+      var M = function(l){ return LM[l.location] || {}; };
+      var sec1 = view === 'lot'
+        ? { cols: ['Stock Unit','Building','Location','Assigned Person','Code','Description','Unit','Expiry','Brand','Batch / Lot #','On Hand'],
+            rows: lots3.map(function(l){ return [l.stock_unit, M(l).building || '', l.location || '—', M(l).assigned_person || '', l.item_code, l.description, l.unit || '', l.expiry_date ? toMDY(l.expiry_date) : 'no expiry', brand3[l.id] || '', RP_LOT_BATCH[l.id] || '', Number(l.qty_on_hand)]; }) }
+        : { cols: ['Stock Unit','Building','Location','Assigned Person','Code','Description','Unit','On Hand','Batches','Nearest Expiry'],
+            rows: order3.map(function(k){ var g = G[k], l = g.l; return [l.stock_unit, M(l).building || '', l.location || '—', M(l).assigned_person || '', l.item_code, l.description, l.unit || '', g.q, g.n, g.exp ? toMDY(g.exp) : '—']; }) };
+      RP_CUR = { title: 'Items per Location', sub: 'As of ' + toMDY(today) + rpSUText() + (bl ? ' · ' + bl : '') + (lc ? ' · ' + lc : '') + (per ? ' · ' + per : ''),
+        kv: [['Locations', locOrder.length], ['Items', sopUniq(lots3.map(function(l){ return l.item_code; })).length], ['Batches', lots3.length]],
+        sections: [sec1, { heading: 'Summary per location', cols: ['Stock Unit','Building','Location','Assigned Person','Items','Total qty'],
+          rows: locOrder.map(function(k){ var x = locSum[k], m = LM[x.loc] || {}; return [x.u, m.building || '', x.loc, m.assigned_person || '', Object.keys(x.items).length, x.q]; }) }] };
     }
     if (t === 'inout'){
       var f1 = apVal('rpFrom'), t1 = apVal('rpTo'); if (!f1 || !t1){ rpMsg('err', 'Pick the From and To dates.'); document.getElementById('rpOut').innerHTML = ''; return; }
