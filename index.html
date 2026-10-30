@@ -3223,7 +3223,7 @@ function rcResetForm(keepAlert){
 // RC_DR = [ { no, date, q: { po_line_id: qty } } ] for the receipt being typed
 var RC_DR = null, DRF = null;
 function drOpen(cfg){ DRF = cfg; if (!DRF.cols.length) drAddCol(true); drRender(); document.getElementById('drMsg').innerHTML = '';
-  document.getElementById('drTitle').textContent = cfg.title || ''; document.getElementById('drOkBtn').textContent = cfg.mode === 'edit' ? '💾 Save DRs' : '✔ Done';
+  document.getElementById('drTitle').textContent = cfg.title || ''; document.getElementById('drOkBtn').textContent = cfg.mode === 'edit' || cfg.mode === 'legacy' ? '💾 Save DRs' : '✔ Done';
   document.getElementById('drMo').style.display = 'flex'; }
 function drClose(){ document.getElementById('drMo').style.display = 'none'; }
 function drAddCol(fill){
@@ -3235,10 +3235,10 @@ function drDelCol(i){ DRF.cols.splice(i, 1); if (!DRF.cols.length) drAddCol(); d
 function drClearAll(){ if (!confirm('Remove every DR column?')) return; DRF.cols = []; drAddCol(); drRender(); }
 function drTot(id){ return DRF.cols.reduce(function(a, c){ return a + (Number(c.q[id]) || 0); }, 0); }
 function drSetQ(i, id, v){ var n = parseFloat(v); if (n > 0) DRF.cols[i].q[id] = n; else delete DRF.cols[i].q[id];
-  var t = document.getElementById('drT' + id); if (t){ var tt = drTot(id); t.textContent = tt ? tt : ''; t.style.color = DRF.mode === 'edit' && tt && tt !== DRF.lines.filter(function(l){ return l.id === id; })[0].rcv ? '#c0392b' : ''; } }
+  var t = document.getElementById('drT' + id); if (t){ var tt = drTot(id); t.textContent = tt ? tt : ''; t.style.color = (DRF.mode === 'edit' && tt && tt !== DRF.lines.filter(function(l){ return l.id === id; })[0].rcv) || (DRF.mode === 'legacy' && tt > DRF.lines.filter(function(l){ return l.id === id; })[0].rcv) ? '#c0392b' : ''; } }
 function drRender(){
-  var E = DRF, edit = E.mode === 'edit', inp = 'style="display:block;width:100%;box-sizing:border-box;margin:0;padding:4px 6px;border:1px solid #cfd8e3;border-radius:5px;font-size:.8rem"';
-  var h = '<div style="overflow:auto"><table class="ap-tbl" style="font-size:.82rem;min-width:100%"><thead><tr><th>Code</th><th style="text-align:right">Qty Ordered</th><th style="text-align:right">' + (edit ? 'Received (this IAR)' : 'Balance') + '</th>' +
+  var E = DRF, edit = E.mode === 'edit' || E.mode === 'legacy', inp = 'style="display:block;width:100%;box-sizing:border-box;margin:0;padding:4px 6px;border:1px solid #cfd8e3;border-radius:5px;font-size:.8rem"';
+  var h = '<div style="overflow:auto"><table class="ap-tbl" style="font-size:.82rem;min-width:100%"><thead><tr><th>Code</th><th style="text-align:right">Qty Ordered</th><th style="text-align:right">' + (E.mode === 'legacy' ? 'Delivered before the app' : edit ? 'Received (this IAR)' : 'Balance') + '</th>' +
     E.cols.map(function(c, i){ return '<th style="min-width:150px;background:#fff8e6;vertical-align:top;text-align:left">' +
       '<div style="display:flex;align-items:center;margin-bottom:4px"><span>DR ' + (i + 1) + '</span><span style="flex:1"></span><a href="#" title="remove this DR" style="color:#c0392b;text-decoration:none" onclick="event.preventDefault();drDelCol(' + i + ')">✕</a></div>' +
       '<div style="font-size:.68rem;color:#777;font-weight:600">DR No.</div>' +
@@ -3265,6 +3265,14 @@ function drCheck(){
 function drRows(cols){ var out = []; cols.forEach(function(c){ Object.keys(c.q).forEach(function(k){ if (c.q[k] > 0) out.push({ po_line_id: Number(k), dr_no: String(c.no || '').trim(), dr_date: c.date, qty: c.q[k] }); }); }); return out; }
 async function drDone(){
   var ck = drCheck(); if (ck.err){ drMsg(ck.err); return; }
+  if (DRF.mode === 'legacy'){
+    var over = DRF.lines.filter(function(l){ return drTot(l.id) > l.rcv + 1e-9; })[0];
+    if (over){ drMsg(esc(over.code) + ': the DR qty (' + drTot(over.id) + ') is more than the qty delivered before the app (' + over.rcv + ').'); return; }
+    var rL = await sb.rpc('save_legacy_deliveries', { p_po: DRF.po, p_rows: drRows(ck.cols) });
+    if (rL.error){ drMsg(esc(errText(rL.error)) + (/save_legacy_deliveries/.test(errText(rL.error)) ? ' — run update 78 in Supabase first.' : '')); return; }
+    drClose(); if (DRF.onSave) await DRF.onSave();
+    return;
+  }
   if (DRF.mode === 'edit'){
     var bad = DRF.lines.filter(function(l){ var t = drTot(l.id); return ck.cols.length && t !== l.rcv; })[0];
     if (bad){ drMsg(esc(bad.code) + ': the DR qty (' + drTot(bad.id) + ') must add up to the qty received (' + bad.rcv + ').'); return; }
@@ -7052,12 +7060,17 @@ async function sopFetch(po){
   var receipts = res[1].filter(function(r){ return r.receipt_type === 'PO'; }), rids = receipts.map(function(r){ return r.receive_id; }), dels = [];
   if (rids.length) try { dels = await fetchAll(function(){ return sb.from('receipt_deliveries').select('receive_id,po_line_id,dr_no,dr_date,qty').in('receive_id', rids).order('dr_date').order('id'); }); } catch(e){ dels = []; }
   var cost = {}; res[0].forEach(function(l){ cost[l.po_line_id] = Number(l.unit_cost) || 0; });
-  var C = sopBuildCols_(receipts, res[2], dels, cost);
-  return { head: head, lines: res[0], receipts: receipts, cols: C.cols, colVal: C.val, rq: C.rq, itemTax: itemTax, sop: res[3].data };
+  // delivered BEFORE THE APP (PO Beg. Balance, update 71) and its DRs (update 78)
+  var legacy = {}, ldels = [];
+  try { (await fetchAll(function(){ return sb.from('v_po_beg_balance').select('po_line_id,legacy_delivered').eq('po_number', po).order('po_line_id'); }))
+          .forEach(function(x){ if (Number(x.legacy_delivered) > 0) legacy[x.po_line_id] = Number(x.legacy_delivered); }); } catch(eL){}
+  if (Object.keys(legacy).length) try { ldels = await fetchAll(function(){ return sb.from('po_legacy_deliveries').select('po_line_id,dr_no,dr_date,qty').in('po_line_id', Object.keys(legacy).map(Number)).order('dr_date').order('id'); }); } catch(eD){ ldels = []; }
+  var C = sopBuildCols_(receipts, res[2], dels, cost, legacy, ldels);
+  return { head: head, lines: res[0], receipts: receipts, cols: C.cols, colVal: C.val, rq: C.rq, itemTax: itemTax, sop: res[3].data, legacy: legacy };
 }
 // SOP delivery columns: one per DR (DR No. + actual delivery date). A receipt without DRs
 // (or the part of it not on a DR) is one column on its Date Received.
-function sopBuildCols_(receipts, rlines, dels, cost){
+function sopBuildCols_(receipts, rlines, dels, cost, legacy, ldels){
   var cols = {}, order = [], rq = {}, val = {}, got = {}, onDr = {}, rmap = {};
   receipts.forEach(function(r){ rmap[r.receive_id] = r; });
   var col = function(key, o){ if (!cols[key]){ cols[key] = o; order.push(key); } return cols[key]; };
@@ -7070,7 +7083,14 @@ function sopBuildCols_(receipts, rlines, dels, cost){
   Object.keys(got).forEach(function(k){ var rem = got[k] - (onDr[k] || 0); if (rem <= 1e-9) return;
     var rid = k.split('|')[0], r = rmap[rid], key = 'R|' + rid;
     col(key, { key: key, date: r.date_received, dr: '', inv: r.invoice_no || '', rcv: [rid], noDr: true }); put(key, k.split('|')[1], rem); });
-  var list = order.map(function(k){ return cols[k]; }).sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : String(a.dr).localeCompare(String(b.dr)); });
+  // delivered before the app: its DRs (update 78); the qty without a DR = one column with no date
+  var lOn = {};
+  (ldels || []).forEach(function(d){ var key = 'L|' + (d.dr_no || '') + '|' + d.dr_date;
+    col(key, { key: key, date: d.dr_date, dr: d.dr_no || '', inv: '', rcv: [], legacy: true });
+    put(key, d.po_line_id, Number(d.qty) || 0); lOn[d.po_line_id] = (lOn[d.po_line_id] || 0) + (Number(d.qty) || 0); });
+  Object.keys(legacy || {}).forEach(function(id){ var rem = legacy[id] - (lOn[id] || 0); if (rem <= 1e-9) return;
+    col('L|nodate', { key: 'L|nodate', date: '', dr: '', inv: '', rcv: [], legacy: true, noDate: true }); put('L|nodate', id, rem); });
+  var list = order.map(function(k){ return cols[k]; }).sort(function(a, b){ var x = a.date || '', y = b.date || ''; return x < y ? -1 : x > y ? 1 : String(a.dr).localeCompare(String(b.dr)); });
   return { cols: list, rq: rq, val: val };
 }
 // SOP item description = the PO Description typed in PO Creation, without the item code
@@ -7205,10 +7225,14 @@ function sopDeliveryGrid(){
   var E = SOP_ED, ro = !CAN_EDIT, dl = E.f.deadline, rc = E.cols;
   var head = '<tr><th style="text-align:right">Qty</th><th>Description</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Amount</th><th>Tax type</th>' +
     rc.map(function(r, i){ var dd = sopDays(r.date, dl);
+      if (r.legacy) return '<th class="sop-dr" style="background:#f3efff' + (CAN_EDIT ? ';cursor:pointer' : '') + '" title="Delivered before the app (PO Beg. Balance)' + (CAN_EDIT ? ' — click to type its DR No. and delivery date' : '') + '"' +
+        (CAN_EDIT ? ' onclick="sopLegacyDrEdit()"' : '') + '>' + (r.noDate ? 'Before app' : 'DR ' + (i + 1)) + '<small>' + (r.dr ? '<b>' + esc(r.dr) + '</b><br>' : '') +
+        (r.noDate ? '<i style="color:#7d3c98">no DR / date yet</i><br>—' : esc(toMDY(r.date)) + '<br><i style="color:#7d3c98">before the app</i><br>' +
+          (dl ? (dd > 0 ? '<b class="late">' + dd + ' day' + (dd === 1 ? '' : 's') + ' late</b>' : '<span class="ok">Not late</span>') : '—')) + '</small></th>';
       return '<th class="sop-dr" title="' + esc(r.rcv.join(', ')) + (CAN_EDIT ? ' — click to see / change the DRs of this receipt' : '') + '"' + (CAN_EDIT ? ' style="cursor:pointer" onclick="sopDrEdit(\'' + esc(r.rcv[0]) + '\')"' : '') + '>DR ' + (i + 1) +
         '<small>' + (r.dr ? '<b>' + esc(r.dr) + '</b><br>' : '') + esc(toMDY(r.date)) + (r.noDr ? '<br><i style="color:#9a6b00">date received</i>' : '') + (!r.dr && r.inv ? '<br>Inv ' + esc(r.inv) : '') + '<br>' +
         (dl ? (dd > 0 ? '<b class="late">' + dd + ' day' + (dd === 1 ? '' : 's') + ' late</b>' : '<span class="ok">Not late</span>') : '—') + '</small></th>'; }).join('') +
-    '<th style="text-align:right">Delivered</th><th style="text-align:right">Variance</th><th style="text-align:right">Undelivered amt</th></tr>';
+    '<th style="text-align:right">Delivered</th><th style="text-align:right" title="Qty ordered − delivered (cancelled included)">Undelivered</th><th style="text-align:right" title="Part of the undelivered qty that was cancelled">of which Cancelled</th><th style="text-align:right">Undelivered amt</th></tr>';
   var tot = { amt: 0, und: 0, dr: rc.map(function(){ return 0; }) };
   var body = E.lines.map(function(l){
     var q = Number(l.qty_ordered) || 0, c = Number(l.unit_cost) || 0, del = 0;
@@ -7217,14 +7241,17 @@ function sopDeliveryGrid(){
     return '<tr><td style="text-align:right">' + sopQty(q) + '</td><td class="sop-desc">' + esc(sopDesc(l)) + '</td><td style="text-align:right">' + sopMoney(c, false) + '</td>' +
       '<td style="text-align:right">' + sopMoney(q * c, false) + '</td><td><select class="sop-tax" data-line="' + l.po_line_id + '" ' + (ro ? 'disabled ' : '') + 'onchange="sopSetTax(' + l.po_line_id + ',this.value)">' + sopTaxOpts(E.lineTax[l.po_line_id]) + '</select></td>' + cells +
       '<td style="text-align:right">' + sopQty(del) + '</td><td style="text-align:right">' + (vr ? '<b class="late">' + sopQty(vr) + '</b>' : '0') + '</td>' +
+      '<td style="text-align:right">' + (Number(l.qty_cancelled) > 0 ? sopQty(Math.min(vr, Number(l.qty_cancelled))) : '-') + '</td>' +
       '<td style="text-align:right">' + (vr ? '<b class="late">' + sopMoney(vr * c, false) + '</b>' : '-') + '</td></tr>';
   }).join('');
   var foot = '<tr class="sop-tot"><td></td><td>Totals</td><td></td><td style="text-align:right">' + sopMoney(tot.amt, false) + '</td><td></td>' +
-    tot.dr.map(function(v){ return '<td style="text-align:right">' + sopMoney(v, false) + '</td>'; }).join('') + '<td></td><td></td><td style="text-align:right">' + sopMoney(tot.und) + '</td></tr>';
+    tot.dr.map(function(v){ return '<td style="text-align:right">' + sopMoney(v, false) + '</td>'; }).join('') + '<td></td><td></td><td></td><td style="text-align:right">' + sopMoney(tot.und) + '</td></tr>';
   return '<div class="ap-scroll" style="max-height:420px"><table class="ap-tbl sop-grid"><thead>' + head + '</thead><tbody>' + body + foot + '</tbody></table></div>' +
-    '<p class="ap-hint" style="margin:6px 0 0">Each DR column = qty delivered on that DR (value at the bottom). Days late = actual delivery date − deadline (' + (dl ? esc(toMDY(dl)) : 'no deadline set') + '). Columns marked <i>date received</i> have no DR typed yet.' +
+    '<p class="ap-hint" style="margin:6px 0 0">Each DR column = qty delivered on that DR (value at the bottom). Purple columns = delivered <b>before the app</b> (PO Beg. Balance). Undelivered = qty ordered − delivered; the cancelled part is shown separately and is included in the Undelivered amount (same as LESS: UNDELIVERED ITEMS). Days late = actual delivery date − deadline (' + (dl ? esc(toMDY(dl)) : 'no deadline set') + '). Columns marked <i>date received</i> have no DR typed yet.' +
     (E.head.cancel_date ? ' Undelivered balance was cancelled on <b>' + esc(toMDY(E.head.cancel_date)) + '</b>.' : '') + '</p>' +
-    (CAN_EDIT && E.receipts.length ? '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:.8rem">📑 DR / Delivery Dates of: ' + E.receipts.map(function(r){
+    (CAN_EDIT && (E.receipts.length || Object.keys(E.legacy || {}).length) ? '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:.8rem">📑 DR / Delivery Dates of: ' +
+      (Object.keys(E.legacy || {}).length ? '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem;background:#f3efff;color:#5b2c6f" onclick="sopLegacyDrEdit()">Before the app (PO Beg. Balance)</button>' : '') +
+      E.receipts.map(function(r){
       return '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem" onclick="sopDrEdit(\'' + esc(r.receive_id) + '\')">' + esc(r.receive_id) + ' · ' + esc(toMDY(r.date_received)) + '</button>'; }).join('') + '</div>' : '');
 }
 function sopDrEdit(rid){
@@ -7236,6 +7263,26 @@ function sopDrEdit(rid){
       document.getElementById('sopFDel').value = sopDelOn_(E); sopReadForm(); if (!E.head.waive_date) sopPenRecalc(true); }
     sopSumRender(); sopMsg('ok', '✅ DRs of ' + esc(rid) + ' saved.');
   });
+}
+// DRs of the qty delivered BEFORE THE APP (update 78)
+async function sopLegacyDrEdit(){
+  var E = SOP_ED, po = E && E.head.po_number; if (!po) return;
+  var ids = Object.keys(E.legacy || {}).map(Number); if (!ids.length){ alert('Nothing was delivered before the app on PO ' + po + '.'); return; }
+  var rows = [];
+  try { rows = await fetchAll(function(){ return sb.from('po_legacy_deliveries').select('po_line_id,dr_no,dr_date,qty').in('po_line_id', ids).order('dr_date').order('id'); }); }
+  catch(e){ alert('Run update 78 in Supabase first (' + errText(e) + ').'); return; }
+  var C = {}, cols = [];
+  rows.forEach(function(d){ var k = (d.dr_no || '') + '|' + d.dr_date; if (!C[k]){ C[k] = { no: d.dr_no || '', date: d.dr_date, q: {} }; cols.push(C[k]); }
+    C[k].q[d.po_line_id] = (C[k].q[d.po_line_id] || 0) + Number(d.qty); });
+  var lines = E.lines.filter(function(l){ return E.legacy[l.po_line_id] > 0; }).map(function(l){
+    return { id: l.po_line_id, code: l.item_code, desc: sopDesc(l), ordered: Number(l.qty_ordered), rcv: E.legacy[l.po_line_id] }; });
+  drOpen({ mode: 'legacy', po: po, lines: lines, cols: cols, title: '— PO ' + po + ' · delivered BEFORE THE APP (PO Beg. Balance)', onSave: async function(){
+    var E2 = await sopFetch(po), E = SOP_ED; E.cols = E2.cols; E.colVal = E2.colVal; E.rq = E2.rq; E.receipts = E2.receipts; E.legacy = E2.legacy;
+    document.getElementById('sopGrid').innerHTML = sopDeliveryGrid();
+    if (confirm('Delivery dates saved. Recompute the late-delivery penalty rows and the DELIVERED ON dates now?')){
+      document.getElementById('sopFDel').value = sopDelOn_(E); sopReadForm(); if (!E.head.waive_date) sopPenRecalc(true); }
+    sopSumRender(); sopMsg('ok', '✅ DRs of the deliveries before the app saved.');
+  } });
 }
 function sopSetTax(lineId, code){ SOP_ED.lineTax[lineId] = code;
   document.querySelectorAll('select[data-line="' + lineId + '"]').forEach(function(x){ if (x.value !== code) x.value = code; }); sopSumRender(); }
