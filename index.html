@@ -7153,14 +7153,14 @@ async function sopOpen(po){
     E.lines.forEach(function(l){ var c = saved[l.po_line_id]; E.lineTax[l.po_line_id] = c && sopTax(c) ? c : sopDefaultTax(E, l); });
     if (s){
       var sd0 = await supDetails_(h.supplier); E.supAddrs = sd0 && sd0.addresses || []; E.supTin = sd0 && sd0.tin || '';
-      E.f = { sopDate: s.sop_date, cls: s.item_class || '', addr: s.supplier_address || '', tin: s.supplier_tin || h.tin || '', deadline: s.deadline || '',
+      E.f = { bg: s.totals && s.totals.bg_manual != null ? !!s.totals.bg_manual : !!h.has_bg, sopDate: s.sop_date, cls: s.item_class || '', addr: s.supplier_address || '', tin: s.supplier_tin || h.tin || '', deadline: s.deadline || '',
         cm: Number(s.credit_memo) || 0, cmRef: (s.totals && s.totals.cm_ref) || '', proj: s.totals && s.totals.project != null ? s.totals.project : (h.project_name || ''), inv: s.invoice_nos || '', invD: s.invoice_dates || '', delOn: s.delivered_on || '', prep: s.prepared_by || '' };
       E.cmTax = s.cm_tax && sopTax(s.cm_tax) ? s.cm_tax : null;
       E.pen = (s.penalties || []).map(function(p){ return Object.assign({}, p); });
     } else {
       var prev = await sopPrevAddress(h.supplier);
       var sd = await supDetails_(h.supplier); E.supAddrs = sd && sd.addresses || []; E.supTin = sd && sd.tin || '';
-      E.f = { sopDate: ymd(new Date()), cls: h.item_class || SOP_CLASS_BY_UNIT[h.category] || '', proj: h.project_name || '', addr: (prev && prev.supplier_address) || E.supAddrs[0] || '', tin: h.tin || (prev ? prev.supplier_tin || '' : '') || E.supTin,
+      E.f = { bg: !!h.has_bg, sopDate: ymd(new Date()), cls: h.item_class || SOP_CLASS_BY_UNIT[h.category] || '', proj: h.project_name || '', addr: (prev && prev.supplier_address) || E.supAddrs[0] || '', tin: h.tin || (prev ? prev.supplier_tin || '' : '') || E.supTin,
         deadline: h.ext_deadline || h.due_date || '', cm: 0,
         inv: sopInvFromIar_(E).inv, invD: sopInvFromIar_(E).invD,
         delOn: sopDelOn_(E),
@@ -7204,7 +7204,8 @@ function sopCompute(E){
     if (p.kind === 'UNDELIVERED') t.pen_und = r2(t.pen_und + p.value); else t.pen_late = r2(t.pen_late + p.value); });
   t.pen_total = r2(t.pen_und + t.pen_late);
   t.after_pen = r2(t.after_tax - t.pen_total);
-  t.has_bg = !!E.head.has_bg;
+  t.has_bg = E.f.bg != null ? !!E.f.bg : !!E.head.has_bg;   // the tick on the SOP (default: a Bank Guarantee document on file)
+  t.bg_manual = t.has_bg;
   t.over_limit = t.total > SOP_RET_LIMIT;
   t.retention_on = t.over_limit && !t.has_bg;
   t.retention = t.retention_on ? r2(t.total * SOP_RET_RATE) : 0;
@@ -7291,6 +7292,7 @@ function sopReadForm(){
   E.f.addr = apVal('sopFAddr'); E.f.tin = apVal('sopFTin'); E.f.sopDate = apVal('sopFDate'); E.f.cls = apVal('sopFCls'); E.f.proj = apVal('sopFProj'); E.f.deadline = apVal('sopFDl');
   E.f.inv = apVal('sopFInv'); E.f.invD = apVal('sopFInvD'); E.f.delOn = apVal('sopFDel'); E.f.prep = apVal('sopFPrep');
   E.f.cm = apNum(apVal('sopFCm')); E.f.cmRef = apVal('sopFCmRef');
+  var bgx = document.getElementById('sopFBg'); if (bgx) E.f.bg = bgx.checked;
 }
 function sopFormChanged(id){
   sopReadForm();
@@ -7385,7 +7387,9 @@ function sopRenderEditor(){
       '<tbody id="sopPenB"></tbody>' +
       (ro ? '' : '<tr><td></td><td colspan="7" class="sp-scr2"><button class="sx-btn purple sm" onclick="sopPenAdd(\'UNDELIVERED\')">＋ undelivered row</button> <button class="sx-btn orange sm" onclick="sopPenAdd(\'LATE\')">＋ late row</button></td></tr>') +
       '<tr><td colspan="6"></td><td class="amt bt" id="spAfterPen"></td><td></td></tr>' +
-      '<tr><td colspan="6">LESS: 1% RETENTION <span id="spRetTag"></span></td><td class="amt" id="spRet"></td><td></td></tr>' +
+      '<tr><td colspan="6">LESS: 1% RETENTION <span id="spRetTag"></span>' +
+        ' <label class="sp-scr2" style="margin-left:10px;font-size:.78rem;cursor:pointer;white-space:nowrap" title="With a bank guarantee there is no 1% retention"><input type="checkbox" id="sopFBg"' + (f.bg ? ' checked' : '') + (ro ? ' disabled' : '') +
+        ' onchange="sopFormChanged()" style="vertical-align:middle"/> 🏦 with bank guarantee (no retention)</label></td><td class="amt" id="spRet"></td><td></td></tr>' +
       '<tr><td colspan="6" class="b">NET AMOUNT</td><td class="amt b bt dbl" id="spNet"></td><td></td></tr>' +
       '<tr><td colspan="8" style="height:10px"></td></tr><tr class="ln"><td colspan="8"></td></tr>' +
       '<tr><td>INVOICE NO.</td><td colspan="3">' + spIn('sopFInv', f.inv, { cls: 'w b' }) + '</td><td class="r">DATE:</td><td colspan="2">' + spIn('sopFInvD', f.invD, { cls: 'w b' }) + '</td>' +
