@@ -2410,6 +2410,12 @@ function rcNum(v){ var n = Number(v); return isNaN(n) ? 0 : n; }
 
 // Searchable combo (same behaviour as the old app). getData() is called on
 // every keystroke, so the list can change (e.g. Convert modal's PO filter).
+// PO creation: picking the supplier fills the TIN (update 77) when it is still empty
+async function poSupPicked_(name){
+  if (!name) return;
+  var t = document.getElementById('poTin'); if (!t || t.value.trim()) return;
+  var sd = await supDetails_(name); if (sd && sd.tin && !t.value.trim()) t.value = sd.tin;
+}
 function rcCombo(baseId, getData, onPick, addNew){
   var inp = document.getElementById(baseId + '_in'), ul = document.getElementById(baseId + '_ul');
   function render(q){
@@ -3675,7 +3681,7 @@ async function poInit(){
     await poLoadOpts();
     document.getElementById('poDate').value = ymd(new Date());
     document.getElementById('poSign').textContent = todayMDY() + ' – ' + ME.username;
-    rcCombo('poSup', function(){ return PO_SUPS; }, null, { label: 'supplier', add: function(n){ return poAddMaster_('supplier', n); } });
+    rcCombo('poSup', function(){ return PO_SUPS; }, poSupPicked_, { label: 'supplier', add: function(n){ return poAddMaster_('supplier', n); } });
     rcCombo('poEU', function(){ return PO_EUS; }, null, { label: 'end user / area', add: function(n){ return poAddMaster_('end_user', n); } });
     rcCombo('poItem', function(){ return PO_ITEM_KEYS; }, function(txt){
       if (!txt){ PO_SEL_ITEM = null; return; }
@@ -4013,6 +4019,7 @@ async function poSubmit(){
   }});
   btn.disabled = false; btn.textContent = '✅ Submit PO';
   if (res.error){ poMsg(errText(res.error), 'err'); return; }
+  if (v('poTin')) sb.rpc('supplier_add_details', { p: { supplier: sup, tin: v('poTin') } }).then(function(){}, function(){});   // update 77: the supplier keeps its TIN
   // MIXED PO: the items received by another unit
   var mixNote = '';
   if (PO_CART.some(function(r){ return r.stock_unit && r.stock_unit !== cat; })){
@@ -5608,7 +5615,7 @@ async function apInit(){
 async function apLoadLists(force){
   if (AP_LISTS && !force) return;
   var res = await Promise.all([
-    fetchAll(function(){ return sb.from('suppliers').select('supplier_code,supplier_name,status').order('supplier_name'); }),
+    fetchAll(function(){ return sb.from('suppliers').select('*').order('supplier_name'); }),   // update 77: + address(es), TIN
     fetchAll(function(){ return sb.from('end_users').select('end_user_code,end_user_name,status,schedule_release').order('end_user_name'); }),
     fetchAll(function(){ return sb.from('locations').select('*').order('location'); })
       .then(function(rows){ return rows.filter(function(l){ return l.active !== false; }); }),   // update 76: removed locations are not listed
@@ -6226,8 +6233,8 @@ async function apXferLog(){
 // ── MASTER LISTS ────────────────────────────────────────────────────────────
 var AP_MKIND = 'supplier', AP_MSEARCH = '', AP_MEDIT = null;
 var AP_MDEF = {
-  supplier: { label: 'Suppliers', key: 'supplier_code', list: 'sup', cols: [['supplier_code','Code'],['supplier_name','Supplier Name'],['status','Status']],
-              fields: [['supplier_name','Supplier Name'],['status','Status','Active|Inactive']] },
+  supplier: { label: 'Suppliers', key: 'supplier_code', list: 'sup', cols: [['supplier_code','Code'],['supplier_name','Supplier Name'],['addresses','Address'],['tin','TIN'],['status','Status']],
+              fields: [['supplier_name','Supplier Name'],['addresses','Address (one per line — 2 or more if the supplier has more)','ta'],['tin','TIN'],['status','Status','Active|Inactive']] },
   end_user: { label: 'End Users', key: 'end_user_code', list: 'eu', cols: [['end_user_code','Code'],['end_user_name','End User'],['schedule_release','Schedule'],['status','Status']],
               fields: [['end_user_name','End User Name'],['schedule_release','Schedule Release'],['status','Status','Active|Inactive']] },
   item:     { label: 'Item Codes', key: 'item_code', list: 'items', cols: [['item_code','Code'],['description','Description'],['unit','Unit'],['category','Category'],['reorder_level','Reorder'],['status','Status']],
@@ -6254,7 +6261,9 @@ function apMasterForm(){
   d.fields.forEach(function(f){
     var v = row ? row[f[0]] : (f[2] ? f[2].split('|')[0] : '');
     if (typeof v === 'boolean' || (f[2] === 'NO|YES' && v == null)) v = v ? 'YES' : 'NO';
-    if (f[2]) html += '<div class="ap-f"><label>' + f[1] + '</label><select id="apM_' + f[0] + '">' + apOpt(f[2].split('|'), v) + '</select></div>';
+    if (Array.isArray(v)) v = v.join('\n');
+    if (f[2] === 'ta') html += '<div class="ap-f" style="grid-column:1/-1"><label>' + f[1] + '</label><textarea id="apM_' + f[0] + '" rows="3" style="width:100%;font:inherit;padding:6px 8px;border:1px solid #ccd;border-radius:6px">' + esc(v == null ? '' : v) + '</textarea></div>';
+    else if (f[2]) html += '<div class="ap-f"><label>' + f[1] + '</label><select id="apM_' + f[0] + '">' + apOpt(f[2].split('|'), v) + '</select></div>';
     else html += apField(f[1], 'apM_' + f[0], v);
   });
   html += '</div>' + (AP_MKIND === 'item' && row && String(row.item_code).indexOf('AUTO-') === 0 ? '<p class="ap-hint">Typed (AUTO-) items keep their code.</p>' : '') +
@@ -6269,7 +6278,7 @@ function apMasterList(){
   document.getElementById('apMList').innerHTML = '<div class="ap-h">' + d.label + ' <span class="ap-ro">(' + f.length + (f.length > 300 ? ' — showing 300, type to search' : '') + ')</span></div>' +
     (AP_MKIND === 'item' ? '<p class="ap-hint" style="margin:0 0 6px">👤 <b>Assigned personnel</b> comes from where the stock is: each Location has an Assigned Person. To change who keeps an item, either change the Assigned Person of the location (Master Lists → Locations → Edit), or move the stock to a location of the other person (🔁 Transfer of Item).</p>' : '') +
     '<div class="ap-scroll"><table class="ap-tbl"><thead><tr>' + d.cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + (AP_MKIND === 'item' ? '<th>Assigned personnel · location · qty</th>' : '') + '<th></th></tr></thead><tbody>' +
-    shown.map(function(r, i){ return '<tr>' + d.cols.map(function(c){ var v = r[c[0]]; return '<td>' + (typeof v === 'boolean' ? (v ? '✔ YES' : '') : esc(v == null ? '' : v)) + '</td>'; }).join('') +
+    shown.map(function(r, i){ return '<tr>' + d.cols.map(function(c){ var v = r[c[0]]; return '<td>' + (typeof v === 'boolean' ? (v ? '✔ YES' : '') : Array.isArray(v) ? v.map(function(x, i){ return '<div' + (i ? ' style="border-top:1px dashed #ddd;margin-top:2px;padding-top:2px"' : '') + '>' + esc(x) + '</div>'; }).join('') : esc(v == null ? '' : v)) + '</td>'; }).join('') +
       (AP_MKIND === 'item' ? '<td class="ap-mwhere" data-code="' + esc(r.item_code) + '"><span class="ap-ro">…</span></td>' : '') +
       '<td class="nw">' + (!apMCanEdit() ? '' : '<button class="ap-btn sm" onclick="apMasterEdit(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">Edit</button>') +
       (!apMCanDelete() ? '' : ' <button class="ap-btn sm gray" style="color:#b42318" onclick="apMasterDelete(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">🗑 Delete</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
@@ -6315,8 +6324,26 @@ function apMasterSave(){
   var d = AP_MDEF[AP_MKIND], p = {};
   d.fields.forEach(function(f){ p[f[0]] = apVal('apM_' + f[0]); });
   if (AP_MEDIT) p.old_key = AP_MEDIT[d.key];
+  if (AP_MKIND === 'supplier') return apSupplierSave_(p);
   return apRpc(AP_MKIND === 'location' ? 'location_save' : 'master_save', AP_MKIND === 'location' ? { p: p } : { p_kind: AP_MKIND, p: p }, function(r){ return (AP_MEDIT ? 'Saved ' : 'Added ') + esc(r.key) + '.'; },
     async function(){ await apLoadLists(true); ENC_FORM = null; RC_ITEMS = []; RC_PO_MAP = {}; AP_MEDIT = null; apMasterForm(); apMasterList(); });
+}
+
+// Suppliers: name / status (master_save) + address(es) and TIN (supplier_set_details, update 77)
+async function apSupplierSave_(p){
+  var addrs = String(p.addresses || '').split(/\n/).map(function(x){ return x.trim(); }).filter(Boolean), tin = String(p.tin || '').trim();
+  var base = { supplier_name: p.supplier_name, status: p.status }; if (p.old_key) base.old_key = p.old_key;
+  return apRpc('master_save', { p_kind: 'supplier', p: base }, function(r){ return (AP_MEDIT ? 'Saved ' : 'Added ') + esc(r.key) + '.'; },
+    async function(r){
+      var d = await sb.rpc('supplier_set_details', { p_code: r.key, p_tin: tin, p_addresses: addrs });
+      if (d.error) apMsg('err', '⚠ Saved the supplier, but not its address / TIN: ' + esc(errText(d.error)) + (/supplier_set_details/.test(errText(d.error)) ? ' — run update 77 in Supabase.' : ''));
+      await apLoadLists(true); ENC_FORM = null; RC_ITEMS = []; RC_PO_MAP = {}; AP_MEDIT = null; apMasterForm(); apMasterList();
+    });
+}
+// supplier details (update 77): { supplier_name, tin, addresses } — null when not found
+async function supDetails_(name){
+  if (!name) return null;
+  try { var r = await sb.from('suppliers').select('*').eq('supplier_name', name).maybeSingle(); return r.data || null; } catch(e){ return null; }
 }
 
 // ── EDIT LOG ────────────────────────────────────────────────────────────────
@@ -7105,13 +7132,15 @@ async function sopOpen(po){
     E.lineTax = {};
     E.lines.forEach(function(l){ var c = saved[l.po_line_id]; E.lineTax[l.po_line_id] = c && sopTax(c) ? c : sopDefaultTax(E, l); });
     if (s){
+      var sd0 = await supDetails_(h.supplier); E.supAddrs = sd0 && sd0.addresses || []; E.supTin = sd0 && sd0.tin || '';
       E.f = { sopDate: s.sop_date, cls: s.item_class || '', addr: s.supplier_address || '', tin: s.supplier_tin || h.tin || '', deadline: s.deadline || '',
         cm: Number(s.credit_memo) || 0, cmRef: (s.totals && s.totals.cm_ref) || '', proj: s.totals && s.totals.project != null ? s.totals.project : (h.project_name || ''), inv: s.invoice_nos || '', invD: s.invoice_dates || '', delOn: s.delivered_on || '', prep: s.prepared_by || '' };
       E.cmTax = s.cm_tax && sopTax(s.cm_tax) ? s.cm_tax : null;
       E.pen = (s.penalties || []).map(function(p){ return Object.assign({}, p); });
     } else {
       var prev = await sopPrevAddress(h.supplier);
-      E.f = { sopDate: ymd(new Date()), cls: h.item_class || SOP_CLASS_BY_UNIT[h.category] || '', proj: h.project_name || '', addr: prev ? prev.supplier_address || '' : '', tin: h.tin || (prev ? prev.supplier_tin || '' : ''),
+      var sd = await supDetails_(h.supplier); E.supAddrs = sd && sd.addresses || []; E.supTin = sd && sd.tin || '';
+      E.f = { sopDate: ymd(new Date()), cls: h.item_class || SOP_CLASS_BY_UNIT[h.category] || '', proj: h.project_name || '', addr: (prev && prev.supplier_address) || E.supAddrs[0] || '', tin: h.tin || (prev ? prev.supplier_tin || '' : '') || E.supTin,
         deadline: h.ext_deadline || h.due_date || '', cm: 0,
         inv: sopInvFromIar_(E).inv, invD: sopInvFromIar_(E).invD,
         delOn: sopDelOn_(E),
@@ -7251,6 +7280,8 @@ async function sopSave(){
     line_tax: E.lineTax, cm_tax: E.cmTax || '', item_tax: itemTax, totals: t };
   var r = await sb.rpc('save_sop', { p: p });
   if (r.error){ sopMsg('err', esc(errText(r.error))); return; }
+  // update 77: a new address / the TIN typed on the SOP is kept with the supplier (nothing is erased)
+  try { await sb.rpc('supplier_add_details', { p: { supplier: E.head.supplier, address: E.f.addr, tin: E.f.tin } }); } catch(eA){}
   await sopLoad(); await sopOpen(E.head.po_number);
   sopMsg('ok', '✅ ' + esc(r.data.sop_id) + ' saved — PO ' + esc(r.data.po_number) + ' is now at stage <b>SOP</b>. Net amount ₱ ' + sopMoney(t.net, false) + '.');
 }
@@ -7263,7 +7294,7 @@ function sopDocChips(po){
 // SOP editor that looks like the printed SOP — yellow boxes are the parts you type in.
 function spIn(id, val, opt){ opt = opt || {};
   return '<input class="sp-in' + (opt.cls ? ' ' + opt.cls : '') + '" type="' + (opt.type || 'text') + '" id="' + id + '" value="' + esc(val == null ? '' : val) + '"' +
-    (opt.step ? ' step="' + opt.step + '"' : '') + (opt.ph ? ' placeholder="' + esc(opt.ph) + '"' : '') + (!CAN_EDIT ? ' readonly' : '') +
+    (opt.step ? ' step="' + opt.step + '"' : '') + (opt.list ? ' list="' + opt.list + '"' : '') + (opt.ph ? ' placeholder="' + esc(opt.ph) + '"' : '') + (!CAN_EDIT ? ' readonly' : '') +
     ' oninput="sopFormChanged()" onchange="sopFormChanged(\'' + id + '\')"/>'; }
 function sopRenderEditor(){
   var E = SOP_ED, h = E.head, f = E.f, ro = !CAN_EDIT, M = sopMoney;
@@ -7281,7 +7312,9 @@ function sopRenderEditor(){
     '<div class="sp-tl"><div class="t">SUMMARY OF PAYMENT</div><div class="d">Date: ' + spIn('sopFDate', f.sopDate, { type: 'date' }) + '</div></div>' +
     '<table class="sp-hdr"><tr><td>AGENCY:</td><td>SOUTHERN PHILIPPINES MEDICAL CENTER</td></tr>' +
       '<tr><td>SUPPLIER:</td><td class="sup">' + esc(h.supplier) + '</td></tr>' +
-      '<tr><td>ADDRESS:</td><td>' + spIn('sopFAddr', f.addr, { cls: 'w', ph: 'type the supplier address' }) + '</td></tr>' +
+      '<tr><td>ADDRESS:</td><td>' + spIn('sopFAddr', f.addr, { cls: 'w', list: 'sopAddrList', ph: (E.supAddrs || []).length > 1 ? 'pick one of the ' + E.supAddrs.length + ' addresses, or type a new one' : 'type the supplier address' }) +
+        '<datalist id="sopAddrList">' + (E.supAddrs || []).map(function(a){ return '<option value="' + esc(a) + '"></option>'; }).join('') + '</datalist>' +
+        ((E.supAddrs || []).length > 1 && CAN_EDIT ? '<div style="font-size:.72rem;color:#1a5e20">📍 ' + E.supAddrs.length + ' addresses on file — click the box (or clear it) to pick</div>' : '') + '</td></tr>' +
       '<tr><td>TIN:</td><td>' + spIn('sopFTin', f.tin, { ph: 'supplier TIN (printed on the DV)' }) + '</td></tr></table>' +
     '<table class="sp-items"><colgroup><col style="width:9%"><col><col style="width:12%"><col style="width:14%"><col style="width:150px"></colgroup>' +
       '<thead><tr><th>Qty</th><th>Description</th><th>UNIT PRICE</th><th>AMOUNT</th><th class="sp-scr">Tax type <small>(not printed)</small></th></tr></thead><tbody>' +
@@ -7493,7 +7526,8 @@ function monEdit(id, po, preset){
       ' <span id="mnPill" style="margin-left:8px">' + monStPill(e.sop_status) + '</span>' +
       (MON_CTX === 'pt' ? '' : '<button class="sx-btn gray sm" style="margin-left:auto" onclick="document.getElementById(\'monEd\').innerHTML=\'\'">✕ Close</button>') + '</div>' +
     '<div class="sx-grid">' +
-      fld('PO Number', 'mnPo', e.po_number || '') + fld('Supplier', 'mnSup', e.supplier || '') + fld('Date Received', 'mnDr', e.date_received || '', { type: 'date' }) +
+      (isNew && ed ? apField('PO Number — pick a PO from the app, or type an old one', 'mnPo', e.po_number || '', { list: 'mnPoList' }) + '<datalist id="mnPoList"></datalist>'
+                   : fld('PO Number', 'mnPo', e.po_number || '')) + fld('Supplier', 'mnSup', e.supplier || '') + fld('Date Received', 'mnDr', e.date_received || '', { type: 'date' }) +
       fld('Category', 'mnCat', e.category || '') + fld('Amount', 'mnAmt', e.amount != null ? e.amount : '') + fld('Fund Cluster', 'mnFund', e.fund_cluster || '') +
       fld('Transmitted to', 'mnTo', e.transmitted_to || '') + fld('Folder', 'mnFol', e.folder || '') +
       (isNew && !u1() ? '<div class="ap-f"><label>Unit</label><select id="mnUnit">' + myCats(PO_CATEGORIES).map(function(u){ return '<option' + ((e.unit || ME.unit || 'SUPPLIES UNIT') === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' : '') +
@@ -7509,9 +7543,46 @@ function monEdit(id, po, preset){
       (!isNew && sopCanDelete() ? '<button class="sx-btn red" onclick="monDel(' + e.id + ')">🗑 Delete row</button>' : '') + '</div>' : '') + '</div>';
   monLkRender(); monTrailRender(); monTlRender();
   if (e.id) monHistLoad();
+  if (isNew && ed) monPoPickerInit_();
   if (MON_CTX !== 'pt') monBox().scrollIntoView && monBox().scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function monBox(){ return document.getElementById(MON_CTX === 'pt' ? 'monEdPt' : 'monEd'); }
+// ＋ Add PO: pick one of the app's POs that is not on the SOP Monitoring list yet (delivered ones first);
+// picking fills Supplier, Category, Amount, Fund Cluster, Unit and Date Received. An old PO can still be typed.
+var MON_PO_PICK = null;
+async function monPoPickerInit_(){
+  var inp = document.getElementById('mnPo'), dl = document.getElementById('mnPoList'); if (!inp || !dl) return;
+  inp.addEventListener('change', function(){ monPoPicked_(inp.value); });
+  try {
+    var mu = myUnits();
+    var res = await Promise.all([
+      fetchAll(function(){ var q = sb.from('po_headers').select('po_number,supplier,category,item_class,fund_cluster,overall_status,po_date'); if (mu) q = q.in('category', mu); return q.order('po_date', { ascending: false }); }),
+      fetchAll(function(){ return sb.from('sop_tracking').select('po_number').order('id'); }).catch(function(){ return []; })
+    ]);
+    var have = {}; res[1].concat(MON_ROWS || []).forEach(function(r){ if (r.po_number) have[String(r.po_number).trim().toUpperCase()] = 1; });
+    var rank = { COMPLETE: 0, PARTIAL: 1 };
+    MON_PO_PICK = {};
+    var list = res[0].filter(function(h){ return !have[String(h.po_number).toUpperCase()]; })
+      .sort(function(a, b){ var x = rank[a.overall_status] != null ? rank[a.overall_status] : 2, y = rank[b.overall_status] != null ? rank[b.overall_status] : 2; return x - y || String(b.po_date || '').localeCompare(String(a.po_date || '')); });
+    list.forEach(function(h){ MON_PO_PICK[String(h.po_number).toUpperCase()] = h; });
+    dl.innerHTML = list.map(function(h){ var st = h.overall_status === 'COMPLETE' ? 'delivered' : h.overall_status === 'PARTIAL' ? 'partial delivery' : 'no delivery yet';
+      return '<option value="' + esc(h.po_number) + '">' + esc(h.supplier + ' · ' + (h.category || '') + ' · ' + st) + '</option>'; }).join('');
+  } catch(e){}
+}
+async function monPoPicked_(val){
+  var po = String(val || '').trim(), h = MON_PO_PICK && MON_PO_PICK[po.toUpperCase()]; if (!h) return;
+  var set = function(id, v){ var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+  set('mnPo', h.po_number); set('mnSup', h.supplier); set('mnCat', h.item_class || ''); set('mnFund', h.fund_cluster || '');
+  var u = document.getElementById('mnUnit'); if (u && h.category && [].some.call(u.options, function(o){ return o.value === h.category; })) u.value = h.category;
+  try {
+    var res = await Promise.all([
+      fetchAll(function(){ return sb.from('po_lines').select('total_amount').eq('po_number', h.po_number).order('id'); }),
+      sb.from('receipts').select('date_received').eq('po_number', h.po_number).order('date_received', { ascending: true }).limit(1)
+    ]);
+    set('mnAmt', Math.round(res[0].reduce(function(a, l){ return a + (Number(l.total_amount) || 0); }, 0) * 100) / 100);
+    if (res[1].data && res[1].data[0]) set('mnDr', res[1].data[0].date_received);
+  } catch(e){}
+}
 function monStChanged(){
   var ch = apVal('mnSt') !== MON_EDIT.sop_status;
   monBox().querySelectorAll('.mn-stnew').forEach(function(el){ el.style.display = ch ? '' : 'none'; });
