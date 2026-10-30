@@ -1694,7 +1694,7 @@ function showApp(){
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('appView').style.display = '';
   document.getElementById('sfn').textContent = ME.full_name;
-  document.getElementById('srl').innerHTML = esc(ME.role) + (ME.unit ? '<span class="unit-tag">' + esc(ME.unit) + '</span>' : '<span class="unit-tag">All units</span>');
+  document.getElementById('srl').innerHTML = esc(ME.role) + (ME.unit ? '<span class="unit-tag">' + esc(myUnitList().join(', ')) + '</span>' : '<span class="unit-tag">All units</span>');
   if (ME.role !== 'Admin' && ME.role !== 'Approver') document.getElementById('navPO').style.display = 'none';
   if (ME.role !== 'Admin' && ME.role !== 'Approver' && ME.role !== 'Encoder') document.getElementById('navAP').style.display = 'none';
   if (ME.role === 'Encoder') document.getElementById('navAP').textContent = '📚 Master Lists';
@@ -1790,7 +1790,7 @@ var PAR_LOG = [];
 async function loadParLog(){
   document.getElementById('tbParLog').innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
   try {
-    PAR_LOG = await fetchAll(function(){ var q = sb.from('v_ris_lines').select('*').eq('doc_type', 'PAR'); if (ME.unit) q = q.eq('ris_unit', ME.unit);
+    PAR_LOG = await fetchAll(function(){ var q = sb.from('v_ris_lines').select('*').eq('doc_type', 'PAR'); if (myUnitList()) q = q.in('ris_unit', myUnitList());
       return q.order('date', { ascending: false }).order('ris_no').order('id'); });
     renderParLog();
   } catch(e){ document.getElementById('tbParLog').innerHTML = '<tr><td colspan="9" style="color:#c62828">' + esc(errText(e)) + (/doc_type/.test(errText(e)) ? ' — has update 54 been run?' : '') + '</td></tr>'; }
@@ -1816,7 +1816,7 @@ async function loadReqLog(){
   try {
     var rows = await fetchAll(function(){
       var q = sb.from('v_ris_lines').select('*').in('status', ['Pending','Draft']);
-      if (ME.unit) q = q.eq('ris_unit', ME.unit);
+      if (myUnitList()) q = q.in('ris_unit', myUnitList());
       return q.order('date', { ascending:false }).order('ris_no').order('id');
     });
     REQ_LOG_DATA = rows.map(mapRisRow);
@@ -1836,7 +1836,7 @@ async function loadIssLog(){
   try {
     var rows = await fetchAll(function(){
       var q = sb.from('v_ris_lines').select('*').eq('status','Issued').is('rsmi_no', null).neq('doc_type', 'PAR');   // PAR is not on the RSMI / RSPI
-      if (ME.unit) q = q.eq('ris_unit', ME.unit);
+      if (myUnitList()) q = q.in('ris_unit', myUnitList());
       if (from) q = q.gte('date', from);
       if (to) q = q.lte('date', to);
       return q.order('date', { ascending:false }).order('ris_no').order('id');
@@ -1872,7 +1872,7 @@ function logRow_(r, clickable){
 // Small note under the RIS No: the unit (for all-units users) and the remarks (requestor / PAR No.).
 function risNote_(r){
   var bits = [];
-  if (!ME.unit && r.risUnit) bits.push('<span style="background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">' + esc(r.risUnit) + '</span>');
+  if (!u1() && r.risUnit) bits.push('<span style="background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">' + esc(r.risUnit) + '</span>');
   if (r.remarks) bits.push('<span title="Remarks">📝 ' + esc(r.remarks) + '</span>');
   return bits.length ? '<div style="font-size:11px;color:#666;margin-top:2px">' + bits.join(' ') + '</div>' : '';
 }
@@ -1976,13 +1976,13 @@ async function loadRsmiLog(){
   var tb = document.getElementById('tbRsmiLog');
   tb.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
   try {
-    RSMI_LOG_DATA = await fetchAll(function(){ var q = sb.from('v_rsmi_log').select('*'); if (ME.unit) q = q.eq('unit', ME.unit); return q.order('rsmi_no', { ascending:false }); });
+    RSMI_LOG_DATA = await fetchAll(function(){ var q = sb.from('v_rsmi_log').select('*'); if (myUnitList()) q = q.in('unit', myUnitList()); return q.order('rsmi_no', { ascending:false }); });
     RSMI_OPEN = {};
     tb.innerHTML = RSMI_LOG_DATA.length
       ? RSMI_LOG_DATA.map(function(r){
           var no = esc(r.rsmi_no), noJs = no.replace(/'/g,"\\'");
           return '<tr class="rsmi-row" data-rsmi="'+no+'" onclick="toggleRsmiDetail(\''+noJs+'\')" title="Click to show the items in this RSMI">'+
-            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(ME.unit ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b></td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
+            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(u1() ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b></td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
             '<td>'+esc(r.ris_nos)+'</td><td>'+esc(r.line_count)+'</td><td>'+esc(r.total_qty)+'</td><td>'+esc(r.encoded_by)+'</td>'+
             '<td><a href="#" class="ris-link" onclick="event.stopPropagation();viewRsmiClick(event,\''+noJs+'\')">👁 View</a></td></tr>'+
             '<tr class="rsmi-detail" id="detail_'+no+'" style="display:none"><td colspan="8"><div class="rsmi-detail-box">Loading…</div></td></tr>';
@@ -2067,7 +2067,7 @@ async function exportXlsx(){
   try {
     var pending = await fetchAll(function(){
       var q = sb.from('v_ris_lines').select('*').eq('status','Pending');
-      if (expUnit) q = q.eq('ris_unit', expUnit); else if (ME.unit) q = q.eq('ris_unit', ME.unit);
+      if (expUnit) q = q.eq('ris_unit', expUnit); else if (myUnitList()) q = q.in('ris_unit', myUnitList());
       return q.order('date').order('id');
     });
     var codes = Array.from(new Set(pending.map(function(p){ return p.item_code; })));
@@ -2123,10 +2123,10 @@ async function openEncodeModal(){
   document.getElementById('encDept').innerHTML = '<option value="">Loading…</option>';
   document.getElementById('encRemarks').value = '';
   var uSel = document.getElementById('encUnit');
-  uSel.innerHTML = ME.unit ? '<option value="' + esc(ME.unit) + '">' + esc(ME.unit) + '</option>'
-    : '<option value="">— Select unit —</option>' + STOCK_UNITS.map(function(u){ return '<option value="'+esc(u)+'">'+esc(u)+'</option>'; }).join('');
-  uSel.disabled = !!ME.unit;
-  document.getElementById('encRemarksBox').style.display = ME.unit === 'EQUIPMENT' ? '' : 'none';
+  uSel.innerHTML = u1() ? '<option value="' + esc(u1()) + '">' + esc(u1()) + '</option>'
+    : '<option value="">— Select unit —</option>' + myCats(STOCK_UNITS).map(function(u){ return '<option value="'+esc(u)+'">'+esc(u)+'</option>'; }).join('');
+  uSel.disabled = !!u1();
+  document.getElementById('encRemarksBox').style.display = u1() === 'EQUIPMENT' ? '' : 'none';
   document.getElementById('encDoc').value = 'RIS'; encDocBox_();
   document.getElementById('moEncode').classList.add('show');
   ENC_FORM = { departments: [], items: [] };
@@ -2193,7 +2193,7 @@ async function openEncDraft(risNo){
   if (r0.endUser && !Array.prototype.some.call(dSel.options, function(o){ return o.value === r0.endUser; })) dSel.innerHTML += '<option value="' + esc(r0.endUser) + '">' + esc(r0.endUser) + '</option>';
   dSel.value = r0.endUser || '';
   var uSel = document.getElementById('encUnit');
-  if (r0.risUnit && !ME.unit){ uSel.value = r0.risUnit; document.getElementById('encRemarksBox').style.display = r0.risUnit === 'EQUIPMENT' ? '' : 'none'; try { await encLoadItems_(); } catch(e){} }
+  if (r0.risUnit && !u1()){ uSel.value = r0.risUnit; document.getElementById('encRemarksBox').style.display = r0.risUnit === 'EQUIPMENT' ? '' : 'none'; try { await encLoadItems_(); } catch(e){} }
   document.getElementById('encRemarks').value = r0.remarks || '';
   ENC_CART = rows.map(function(r){ return { code: r.itemCode, description: r.itemDescription, unit: r.unit || '', qty: Number(r.qty) || 0 }; });
   renderEncCart();
@@ -2451,8 +2451,8 @@ async function rcInit(){
   if (!RC_READY){
     RC_READY = true;
     var catSel = document.getElementById('rcCat');
-    catSel.innerHTML = ME.unit ? '<option value="' + esc(ME.unit) + '">' + esc(ME.unit) + '</option>'
-      : '<option value="">-- Select Category / Unit --</option>' + PO_CATEGORIES.map(function(c){ return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+    catSel.innerHTML = u1() ? '<option value="' + esc(u1()) + '">' + esc(u1()) + '</option>'
+      : '<option value="">-- Select Category / Unit --</option>' + myCats(PO_CATEGORIES).map(function(c){ return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
     RC_CAT = catSel.value;
     rcCombo('rcPo', function(){
       if (!RC_CAT) return [];
@@ -2479,7 +2479,7 @@ var RC_DRAFT_ID = null, RC_DRAFTS = [];
 var RC_HDR_IDS = ['rcDate','rcSup_in','rcLoc_in','rcInvNo','rcInvDate','rcFund','rcReqOff','rcResp'];
 async function rcLoadDrafts(){
   try {
-    RC_DRAFTS = await fetchAll(function(){ var q = sb.from('receive_drafts').select('id,kind,category,po_number,supplier,saved_by,saved_at'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('saved_at', { ascending: false }); });
+    RC_DRAFTS = await fetchAll(function(){ var q = sb.from('receive_drafts').select('id,kind,category,po_number,supplier,saved_by,saved_at'); if (myUnitList()) q = q.in('category', myUnitList()); return q.order('saved_at', { ascending: false }); });
   } catch(e){ RC_DRAFTS = []; }
   var b = document.getElementById('rcDraftsBtn');
   if (b){ b.style.display = RC_DRAFTS.length ? '' : 'none'; b.textContent = '📂 Drafts (' + RC_DRAFTS.length + ')'; }
@@ -2553,13 +2553,13 @@ async function rcLoadFormData(){
     try {
       lines = await fetchAll(function(){
         var q = sb.from('v_po_lines').select('*').neq('overall_status','COMPLETE');
-        if (ME.unit) q = q.eq('line_unit', ME.unit);           // mixed PO: the unit's own items
+        if (myUnitList()) q = q.in('line_unit', myUnitList());           // mixed PO: the unit's own items
         return q.order('po_number').order('po_line_id');
       });
     } catch(e1){                                               // before update 55
       lines = await fetchAll(function(){
         var q = sb.from('v_po_lines').select('*').neq('overall_status','COMPLETE');
-        if (ME.unit) q = q.eq('category', ME.unit);
+        if (myUnitList()) q = q.in('category', myUnitList());
         return q.order('po_number').order('po_line_id');
       });
     }
@@ -2572,7 +2572,8 @@ async function rcLoadFormData(){
     });
     var sups = await fetchAll(function(){ return sb.from('suppliers').select('supplier_name').eq('status','Active').order('supplier_name'); });
     RC_SUPPLIERS = sups.map(function(s){ return s.supplier_name; });
-    var locs = await fetchAll(function(){ return sb.from('locations').select('location,assigned_person').order('location'); });
+    var locs = (await fetchAll(function(){ return sb.from('locations').select('*').order('location'); }))
+      .filter(function(l){ return l.active !== false; });   // update 76: removed locations are not offered
     RC_LOCS = locs.map(function(l){ return { location: l.location, display: l.location + (l.assigned_person ? ' - ' + l.assigned_person : '') }; });
     if (!RC_ITEMS.length){
       var its = await fetchAll(function(){ return sb.from('items').select('item_code,description,unit,category').eq('status','ACTIVE').order('item_code'); });
@@ -2718,6 +2719,64 @@ function rcRemoveRow(key){
   rcRenderRows();
 }
 function rcRow(key){ return RC_ROWS.filter(function(r){ return r.key === key; })[0]; }
+// ── ⇄ Convert unit (update 75): e.g. 1 BOX = 100 PCS — PO counts BOX, stock card / IAR get PCS ──
+function rcUcQty_(n){ return Math.round(Number(n) * 10000) / 10000; }
+function rcUnitCell_(r, hasParts){
+  var can = !hasParts && !!r.itemCode && !(r.locked && r.isCoded === false);
+  var u = esc(r.unit || '—');
+  if (!r.conv) return u + (can ? ' <button type="button" class="btn btn-out btn-sm" style="padding:1px 6px" title="Convert unit (e.g. BOX → PCS)" onclick="rcUcOpen(' + r.key + ')">⇄</button>' : '');
+  var per = r.cost > 0 ? ' · ₱' + rcUcQty_(r.cost / r.conv.f).toLocaleString('en-US', { maximumFractionDigits: 4 }) + '/' + esc(r.conv.u) : '';
+  return '<span style="text-decoration:line-through;color:#999">' + u + '</span> → <b>' + esc(r.conv.u) + '</b>' +
+    (can ? ' <button type="button" class="btn btn-out btn-sm" style="padding:1px 6px" title="Change / remove the conversion" onclick="rcUcOpen(' + r.key + ')">⇄</button>' : '') +
+    '<div class="rc-sub" style="color:#1a5e20">1 ' + u + ' = ' + rcUcQty_(r.conv.f) + ' ' + esc(r.conv.u) + per + '</div>';
+}
+function rcUcRows_(r){   // the conversion is the same for every batch row of the PO line
+  return RC_ROWS.filter(function(x){ return x === r || (r.locked && x.locked && x.poLineId === r.poLineId && !!x.free === !!r.free); });
+}
+function rcUcOpen(key){
+  var r = rcRow(key); if (!r) return;
+  var old = document.getElementById('rcUcMo'); if (old) old.remove();
+  var mo = document.createElement('div'); mo.id = 'rcUcMo';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:3000;display:flex;align-items:center;justify-content:center';
+  var c = r.conv || { f: '', u: 'PCS' };
+  mo.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;width:min(430px,92vw);box-shadow:0 10px 40px rgba(0,0,0,.25);font-size:.9rem">' +
+    '<div style="font-weight:800;font-size:1rem;margin-bottom:4px">⇄ Convert unit</div>' +
+    '<div style="color:#666;margin-bottom:12px">' + esc(r.itemCode + ' — ' + r.desc) + '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>1 ' + esc(r.unit || 'unit') + ' =</b>' +
+      '<input type="number" id="rcUcF" min="0" step="any" value="' + esc(c.f) + '" style="width:100px" oninput="rcUcPrev_(' + key + ')"/>' +
+      '<input type="text" id="rcUcU" value="' + esc(c.u) + '" placeholder="PCS" style="width:90px;text-transform:uppercase" oninput="rcUcPrev_(' + key + ')"/></div>' +
+    '<div id="rcUcPrev" style="margin:12px 0;padding:8px 10px;background:#f4f8f4;border-radius:8px;color:#1a5e20"></div>' +
+    '<div style="color:#777;font-size:.78rem;margin-bottom:12px">The PO keeps counting in ' + esc(r.unit || 'its unit') + '. The stock card, batches and IAR get the new unit; the unit cost is divided. ' +
+      'The item code\'s unit becomes the new unit.</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">' +
+      (r.conv ? '<button type="button" class="btn btn-out btn-sm" onclick="rcUcSave(' + key + ',true)">Remove conversion</button>' : '') +
+      '<button type="button" class="btn btn-out btn-sm" onclick="document.getElementById(\'rcUcMo\').remove()">Cancel</button>' +
+      '<button type="button" class="btn btn-ok btn-sm" onclick="rcUcSave(' + key + ')">✔ Save</button></div></div>';
+  document.body.appendChild(mo);
+  rcUcPrev_(key);
+}
+function rcUcPrev_(key){
+  var r = rcRow(key), el = document.getElementById('rcUcPrev'); if (!r || !el) return;
+  var f = Number(document.getElementById('rcUcF').value), u = String(document.getElementById('rcUcU').value || '').trim().toUpperCase();
+  if (!(f > 0) || !u){ el.innerHTML = 'Type how many ' + esc(u || 'PCS') + ' are in 1 ' + esc(r.unit || 'unit') + '.'; return; }
+  var q = rcUcRows_(r).reduce(function(a, x){ return a + (Number(x.qty) || 0); }, 0);
+  el.innerHTML = (q > 0 ? q + ' ' + esc(r.unit || '') + ' = <b>' + rcUcQty_(q * f).toLocaleString('en-US') + ' ' + esc(u) + '</b><br>' : '') +
+    'Unit cost: ₱' + Number(r.cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' / ' + esc(r.unit || '') + ' = <b>₱' +
+    rcUcQty_((Number(r.cost) || 0) / f).toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' / ' + esc(u) + '</b>';
+}
+function rcUcSave(key, remove){
+  var r = rcRow(key); if (!r) return;
+  var conv = null;
+  if (!remove){
+    var f = Number(document.getElementById('rcUcF').value), u = String(document.getElementById('rcUcU').value || '').trim().toUpperCase();
+    if (!(f > 0)){ alert('Type how many are in 1 ' + (r.unit || 'unit') + ' (more than zero).'); return; }
+    if (!u){ alert('Type the new unit (e.g. PCS).'); return; }
+    if (u === String(r.unit || '').trim().toUpperCase() && f === 1){ remove = true; } else conv = { f: f, u: u };
+  }
+  rcUcRows_(r).forEach(function(x){ x.conv = conv; });
+  var mo = document.getElementById('rcUcMo'); if (mo) mo.remove();
+  rcRenderRows();
+}
 function rcSet(key, field, val){
   var r = rcRow(key); if (!r) return;
   if (field === 'qty' || field === 'cost') val = rcNum(val);
@@ -2803,7 +2862,7 @@ function rcRenderRows(){
       '<td>' + poDescCell + '</td>' +
       '<td>' + itemCell + '</td>' +
       (!r.locked && !rcCoded() && r.first ? '<td><input type="text" id="rcUnitIn' + k + '" placeholder="pc, set…" value="' + esc(r.unit) + '" oninput="rcSet(' + k + ',\'unit\',this.value)" style="width:70px"/></td>'
-        : '<td id="rcUnit' + k + '">' + esc(r.unit || '—') + '</td>') +
+        : '<td id="rcUnit' + k + '">' + rcUnitCell_(r, hasParts) + '</td>') +
       '<td>' + (r.first && r.ordered != null ? r.ordered : '') + '</td>' +
       '<td class="' + (r.first && r.balance != null ? balCls : '') + '">' + (r.first && r.balance != null ? r.balance : r.free ? 'free' : (r.locked ? '↑ same line' : '—')) + '</td>' +
       '<td><input type="number" min="0" step="1" value="' + (r.qty || 0) + '" oninput="rcSet(' + k + ',\'qty\',this.value)"/></td>' +
@@ -2932,7 +2991,7 @@ function rcFormIarData(){
   var items = [];
   RC_ROWS.filter(function(r){ return r.itemCode && r.qty > 0; }).forEach(function(r){
     if (r.parts && r.parts.length) r.parts.forEach(function(p){ items.push({ code: p.code || '', desc: p.desc, unit: p.unit, qty: p.qty, lot: r.poDesc || r.desc, sn: p.sn || '' }); });
-    else items.push({ code: r.itemCode, desc: r.desc + (r.free ? ' — FREE GOODS' : ''), unit: r.unit, qty: r.qty, free: !!r.free });
+    else items.push({ code: r.itemCode, desc: r.desc + (r.free ? ' — FREE GOODS' : ''), unit: r.conv ? r.conv.u : r.unit, qty: r.conv ? rcUcQty_(r.qty * r.conv.f) : r.qty, free: !!r.free });
   });
   if (!items.length){ rcAlert('error', 'No items with Qty Received to preview.'); return null; }
   // Complete only if every PO line is fully delivered after this save, or has its balance cancelled.
@@ -3050,6 +3109,7 @@ function rcSave(){
       if (perLine[r.poLineId] > bal){ rcAlert('error', esc(r.itemCode) + ': total Qty Received (' + perLine[r.poLineId] + ') is more than the PO balance (' + bal + ').'); return; }
     }
     var itm = { po_line_id: r.free ? null : r.poLineId, free_goods: !!r.free, free_of_line: r.free ? r.poLineId : null, item_code: r.itemCode, description: r.desc, unit: r.unit, qty_received: r.qty, unit_cost: r.free ? 0 : r.cost, expiry_date: (r.noExp || RC_CATERING || rParts) ? '' : r.exp, remarks: String(r.remarks || '').trim(), batch_no: rcShowBatch_() ? String(r.batchNo || '').trim() : '' };
+    if (r.conv && !rParts){ itm.conv_factor = r.conv.f; itm.conv_unit = r.conv.u; }
     if (rParts) itm.parts = rParts.map(function(p){ return { item_code: p.code || '', description: p.desc, unit: p.unit, qty: p.qty, unit_cost: p.cost === '' ? null : p.cost, expiry_date: p.exp || '', serial_no: p.sn || '' }; });
     items.push(itm);
   }
@@ -3115,10 +3175,12 @@ function rcConfirmCancelThenSave(payload, iar, cancels){
 async function rcDoSave(payload, iar){
   var btn = document.getElementById('rcSaveBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
-  var res = await sb.rpc(payload.deliveries && payload.deliveries.length ? 'save_receipt_dr' : 'save_receipt', { p: payload });
+  var hasConv = (payload.items || []).some(function(x){ return x.conv_factor; });
+  var res = await sb.rpc((payload.deliveries && payload.deliveries.length) || hasConv ? 'save_receipt_dr' : 'save_receipt', { p: payload });
   btn.disabled = false; btn.textContent = '💾 Save';
-  if (res.error){ rcAlert('error', esc(errText(res.error)) + (/save_receipt_dr/.test(errText(res.error)) ? ' — has update 58 been run?' : '')); return; }
+  if (res.error){ rcAlert('error', esc(errText(res.error)) + (/save_receipt_dr|receipt_apply_conv/.test(errText(res.error)) ? ' — has update 75 been run?' : '')); return; }
   var d = res.data, parts = [];
+  if (hasConv && d.receive_id && !d.converted){ rcAlert('error', 'Saved ' + esc(d.receive_id) + ', but the unit conversion was NOT applied — run update 75 in Supabase, then ask the Approver to remove the line and receive it again.'); return; }
   if (d.receive_id){
     try { var iq = await sb.from('receipts').select('iar_no').eq('receive_id', d.receive_id).maybeSingle(); d.iar_no = iq.data ? iq.data.iar_no : null; } catch(e){}
     if (iar && d.iar_no){ iar.iarNo = d.iar_no; iar.preview = false; }
@@ -3287,7 +3349,7 @@ function rcStatusCls(s){
 async function rcLoadBalances(){
   document.getElementById('rcTbBal').innerHTML = '<tr class="empty-row"><td colspan="10">Loading…</td></tr>';
   try {
-    RC_BAL = await fetchAll(function(){ var q = sb.from('v_po_lines').select('*'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('po_number').order('po_line_id'); });
+    RC_BAL = await fetchAll(function(){ var q = sb.from('v_po_lines').select('*'); if (myUnitList()) q = q.in('category', myUnitList()); return q.order('po_number').order('po_line_id'); });
     rcRenderBalances();
   } catch(e){ rcAlert('error', 'Error: ' + esc(errText(e))); }
 }
@@ -3314,7 +3376,7 @@ async function rcLoadReceipts(){
   try {
     RC_RCV = await fetchAll(function(){
       var q = sb.from('v_receipt_lines').select('*').eq('receipt_type','PO');
-      if (ME.unit) q = q.eq('category', ME.unit);
+      if (myUnitList()) q = q.in('category', myUnitList());
       if (from) q = q.gte('date', from);
       if (to) q = q.lte('date', to);
       return q.order('date', { ascending:false }).order('receive_id', { ascending:false }).order('receipt_line_id');
@@ -3343,7 +3405,7 @@ async function rcLoadAdvance(){
   try {
     RC_ADV = await fetchAll(function(){
       var q = sb.from('v_receipt_lines').select('*').eq('receipt_type','ADVANCE');
-      if (ME.unit) q = q.eq('category', ME.unit);
+      if (myUnitList()) q = q.in('category', myUnitList());
       return q.order('date', { ascending:false }).order('receive_id').order('receipt_line_id');
     });
     rcRenderAdvance();
@@ -3606,8 +3668,8 @@ async function poInit(){
   if (!allowed) return;
   if (!PO_READY){
     PO_READY = true;
-    var cats = ME.unit ? [ME.unit] : PO_CATEGORIES;
-    document.getElementById('poCategory').innerHTML = (ME.unit ? '' : '<option value="">-- Select Category --</option>') + poOpts(cats);
+    var cats = myCats(PO_CATEGORIES);
+    document.getElementById('poCategory').innerHTML = (u1() ? '' : '<option value="">-- Select Category --</option>') + poOpts(cats);
     document.getElementById('poFund').innerHTML += poOpts(PO_FUNDS);
     document.getElementById('poTxn').innerHTML = poOpts(TXN_TYPES);
     await poLoadOpts();
@@ -3966,7 +4028,7 @@ async function poSubmit(){
   PO_CART = []; poRenderCart();
   ['poNumber','poNoa','poTin','poObrNo','poObrDate','poSup_in','poEU_in','poEuName','poProj','poGrp','poFund','poMode','poSrd','poTerms','poClass'].forEach(function(id){ document.getElementById(id).value = ''; });
   document.getElementById('poClass').dataset.auto = ''; poDueCalc();
-  if (!ME.unit) document.getElementById('poCategory').value = '';
+  if (!u1()) document.getElementById('poCategory').value = '';
   // refresh the item list so newly created AUTO- items show as suggestions next time
   PO_ITEMS = await fetchAll(function(){ return sb.from('items').select('item_code,description,unit,category').eq('status','ACTIVE').order('item_code'); });
   RC_ITEMS = [];   // Receive page reloads its item list too
@@ -4028,7 +4090,7 @@ var RSMI_PRINT_CSS =
 // Issued); every other unit on the RSMI. Same flow, different form and numbering.
 var RSPI_UNITS = ['EQUIPMENT'];
 function docTypeOf(unit){ return RSPI_UNITS.indexOf(unit) !== -1 ? 'RSPI' : 'RSMI'; }
-function myDocLabel(){ return ME && ME.unit ? docTypeOf(ME.unit) : 'RSMI / RSPI'; }
+function myDocLabel(){ return ME && u1() ? docTypeOf(u1()) : 'RSMI / RSPI'; }
 function applyDocLabels(){
   var L = myDocLabel();
   document.getElementById('subtabIss').textContent = '📤 Issuance Transactions (for ' + L + ')';
@@ -4037,7 +4099,7 @@ function applyDocLabels(){
 }
 function checkedDocType_(){
   var u = null; ISS_LOG_DATA.forEach(function(r){ if (RSMI_CHECKED[r.risNo] && !u) u = r.risUnit; });
-  return u ? docTypeOf(u) : (ME && ME.unit ? docTypeOf(ME.unit) : 'RSMI');
+  return u ? docTypeOf(u) : (ME && u1() ? docTypeOf(u1()) : 'RSMI');
 }
 function updateRsmiSelectbar(){
   var count = Object.keys(RSMI_CHECKED).filter(function(k){ return RSMI_CHECKED[k]; }).length;
@@ -5180,10 +5242,20 @@ function apMCanEdit(){ return ME.role === 'Approver' || ME.role === 'Encoder' ||
 function apMCanDelete(){ return ME.role === 'Approver' || ME.role === 'Admin'; }
 // the units this user works on (null = all). The SUPPLIES UNIT Approver also has HARDWARE (sub-unit);
 // FLUIDS are part of DRUGS AND MEDS.
-function myUnits(){
+// the user's units: main unit + extra units (null = every unit). UPDATE 74: a user can have more than one unit.
+function myUnitList(){
   if (!ME || !ME.unit) return null;
-  if (ME.role === 'Approver' && ME.unit === 'SUPPLIES UNIT') return ['SUPPLIES UNIT', 'HARDWARE'];
-  return [ME.unit];
+  var a = [ME.unit]; (ME.extra_units || []).forEach(function(u){ if (u && a.indexOf(u) === -1) a.push(u); });
+  return a;
+}
+// the user's unit when the user has exactly ONE unit (fixed on every form); null = several units or every unit
+function u1(){ var a = myUnitList(); return a && a.length === 1 ? a[0] : null; }
+// a list of units cut down to the user's units
+function myCats(list){ var a = myUnitList(); return a ? a.slice() : list; }
+function myUnits(){
+  var a = myUnitList(); if (!a) return null;
+  if (ME.role === 'Approver' && a.indexOf('SUPPLIES UNIT') !== -1 && a.indexOf('HARDWARE') === -1) a.push('HARDWARE');
+  return a;
 }
 // ── Approver To Do: what the Approver of a unit has to check on a PO ──────────
 var TODO_ROWS = [], TODO_SHOW = 'OPEN', TODO_UNIT = '';
@@ -5538,7 +5610,8 @@ async function apLoadLists(force){
   var res = await Promise.all([
     fetchAll(function(){ return sb.from('suppliers').select('supplier_code,supplier_name,status').order('supplier_name'); }),
     fetchAll(function(){ return sb.from('end_users').select('end_user_code,end_user_name,status,schedule_release').order('end_user_name'); }),
-    fetchAll(function(){ return sb.from('locations').select('location,building,assigned_person').order('location'); }),
+    fetchAll(function(){ return sb.from('locations').select('*').order('location'); })
+      .then(function(rows){ return rows.filter(function(l){ return l.active !== false; }); }),   // update 76: removed locations are not listed
     fetchAll(function(){ return sb.from('items').select('item_code,description,unit,category,reorder_level,status').order('item_code'); })
   ]);
   AP_LISTS = { sup: res[0], eu: res[1], loc: res[2], items: res[3] };
@@ -6159,8 +6232,8 @@ var AP_MDEF = {
               fields: [['end_user_name','End User Name'],['schedule_release','Schedule Release'],['status','Status','Active|Inactive']] },
   item:     { label: 'Item Codes', key: 'item_code', list: 'items', cols: [['item_code','Code'],['description','Description'],['unit','Unit'],['category','Category'],['reorder_level','Reorder'],['status','Status']],
               fields: [['item_code','Item Code'],['description','Description'],['unit','Unit'],['category','Category'],['reorder_level','Reorder Level'],['status','Status','ACTIVE|INACTIVE']] },
-  location: { label: 'Locations', key: 'location', list: 'loc', cols: [['location','Location'],['building','Building'],['assigned_person','Assigned Person']],
-              fields: [['location','Location'],['building','Building'],['assigned_person','Assigned Person']] }
+  location: { label: 'Locations', key: 'location', list: 'loc', cols: [['location','Location'],['building','Building'],['assigned_person','Assigned Person'],['direct_to_end_user','Direct to end user']],
+              fields: [['location','Location'],['building','Building'],['assigned_person','Assigned Person'],['direct_to_end_user','Direct to end user (not in Stock Viewer)','NO|YES']] }
 };
 function apMasterView(kind){
   AP_MKIND = kind || AP_MKIND; AP_MEDIT = null;
@@ -6180,6 +6253,7 @@ function apMasterForm(){
   var html = '<div class="ap-h">' + (row ? '✏️ Edit ' : '➕ Add ') + d.label.replace(/s$/, '') + (row ? ' — ' + esc(row[d.key]) : '') + '</div><div class="ap-grid">';
   d.fields.forEach(function(f){
     var v = row ? row[f[0]] : (f[2] ? f[2].split('|')[0] : '');
+    if (typeof v === 'boolean' || (f[2] === 'NO|YES' && v == null)) v = v ? 'YES' : 'NO';
     if (f[2]) html += '<div class="ap-f"><label>' + f[1] + '</label><select id="apM_' + f[0] + '">' + apOpt(f[2].split('|'), v) + '</select></div>';
     else html += apField(f[1], 'apM_' + f[0], v);
   });
@@ -6195,7 +6269,7 @@ function apMasterList(){
   document.getElementById('apMList').innerHTML = '<div class="ap-h">' + d.label + ' <span class="ap-ro">(' + f.length + (f.length > 300 ? ' — showing 300, type to search' : '') + ')</span></div>' +
     (AP_MKIND === 'item' ? '<p class="ap-hint" style="margin:0 0 6px">👤 <b>Assigned personnel</b> comes from where the stock is: each Location has an Assigned Person. To change who keeps an item, either change the Assigned Person of the location (Master Lists → Locations → Edit), or move the stock to a location of the other person (🔁 Transfer of Item).</p>' : '') +
     '<div class="ap-scroll"><table class="ap-tbl"><thead><tr>' + d.cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + (AP_MKIND === 'item' ? '<th>Assigned personnel · location · qty</th>' : '') + '<th></th></tr></thead><tbody>' +
-    shown.map(function(r, i){ return '<tr>' + d.cols.map(function(c){ return '<td>' + esc(r[c[0]] == null ? '' : r[c[0]]) + '</td>'; }).join('') +
+    shown.map(function(r, i){ return '<tr>' + d.cols.map(function(c){ var v = r[c[0]]; return '<td>' + (typeof v === 'boolean' ? (v ? '✔ YES' : '') : esc(v == null ? '' : v)) + '</td>'; }).join('') +
       (AP_MKIND === 'item' ? '<td class="ap-mwhere" data-code="' + esc(r.item_code) + '"><span class="ap-ro">…</span></td>' : '') +
       '<td class="nw">' + (!apMCanEdit() ? '' : '<button class="ap-btn sm" onclick="apMasterEdit(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">Edit</button>') +
       (!apMCanDelete() ? '' : ' <button class="ap-btn sm gray" style="color:#b42318" onclick="apMasterDelete(\'' + esc(String(r[d.key]).replace(/'/g, "\\'")) + '\')">🗑 Delete</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>';
@@ -6227,16 +6301,21 @@ async function apMasterDelete(key){
   if (!apMCanDelete()) return;
   var d = AP_MDEF[AP_MKIND], one = d.label.replace(/s$/, '');
   if (!confirm('Delete ' + one + ' "' + key + '"?\n\nThis cannot be undone. If it is already used in POs, receipts or RIS, set its Status to Inactive instead.')) return;
-  var r = await sb.rpc('master_delete', { p_kind: AP_MKIND, p: { key: key } });
+  var r = AP_MKIND === 'location'
+    ? await sb.rpc('location_delete', { p_key: key })      // update 76
+    : await sb.rpc('master_delete', { p_kind: AP_MKIND, p: { key: key } });
+  if (r.error && AP_MKIND === 'location' && /location_delete/.test(errText(r.error))){ apMsg('err', '❌ Run update 76 in Supabase first (location_delete is missing).'); return; }
   if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/master_delete/.test(errText(r.error)) && /not|exist|find/i.test(errText(r.error)) ? ' — has update 50 been run?' : '')); return; }
-  apMsg('ok', '🗑 Deleted ' + esc(key) + '.');
+  apMsg('ok', r.data && r.data.hidden
+    ? '🗑 Removed ' + esc(key) + ' from the lists. It was used before, so old IARs, stock cards, RIS and transfers still show it. (Add it again with the same name to bring it back.)'
+    : '🗑 Deleted ' + esc(key) + '.');
   await apLoadLists(true); ENC_FORM = null; RC_ITEMS = []; RC_PO_MAP = {}; AP_MEDIT = null; apMasterForm(); apMasterList();
 }
 function apMasterSave(){
   var d = AP_MDEF[AP_MKIND], p = {};
   d.fields.forEach(function(f){ p[f[0]] = apVal('apM_' + f[0]); });
   if (AP_MEDIT) p.old_key = AP_MEDIT[d.key];
-  return apRpc('master_save', { p_kind: AP_MKIND, p: p }, function(r){ return (AP_MEDIT ? 'Saved ' : 'Added ') + esc(r.key) + '.'; },
+  return apRpc(AP_MKIND === 'location' ? 'location_save' : 'master_save', AP_MKIND === 'location' ? { p: p } : { p_kind: AP_MKIND, p: p }, function(r){ return (AP_MEDIT ? 'Saved ' : 'Added ') + esc(r.key) + '.'; },
     async function(){ await apLoadLists(true); ENC_FORM = null; RC_ITEMS = []; RC_PO_MAP = {}; AP_MEDIT = null; apMasterForm(); apMasterList(); });
 }
 
@@ -6339,7 +6418,7 @@ function rpSwitch(t){
         '<datalist id="rpSupDl">' + ((AP_LISTS && AP_LISTS.sup) || []).map(function(x){ return '<option value="' + esc(x.supplier_name) + '"></option>'; }).join('') + '</datalist></div>' +
       apField('PO No. / item / brand', 'rpSearch', '');
   if (t === 'month') { var d = new Date(); f = rpSUField() + apField('From', 'rpFrom', ymd(new Date(d.getFullYear(), d.getMonth() - 11, 1)), { type: 'date' }) + apField('To', 'rpTo', today, { type: 'date' }); }
-  if (t === 'po') f = '<div class="ap-f"><label>Unit</label><select id="rpUnit"' + (ME.unit ? ' disabled' : '') + '>' + (ME.unit ? '' : '<option value="">All units</option>') + apOpt(cats, ME.unit || '') + '</select></div>' +
+  if (t === 'po') f = '<div class="ap-f"><label>Unit</label><select id="rpUnit"' + (u1() ? ' disabled' : '') + '>' + (ME.unit ? '' : '<option value="">All units</option>') + apOpt(myCats(cats), ME.unit || '') + '</select></div>' +
       '<div class="ap-f"><label>Delivery Status</label><select id="rpPoSt"><option value="">All</option><option>OPEN</option><option>PARTIAL</option><option>COMPLETE</option><option value="NOT COMPLETE">Not complete (open + partial)</option></select></div>' +
       '<div class="ap-f"><label>Fund Cluster</label><select id="rpFund"><option value="">All funds</option></select></div>' +
       '<div class="ap-f"><label>PO Trail</label><select id="rpTrail"><option value="">All</option><option value="LACKING">With lacking documents (PENDING)</option>' +
@@ -6351,7 +6430,7 @@ function rpSwitch(t){
   rpColsUI();
   document.getElementById('rpOut').innerHTML = '<div class="ap-empty">Set the filters, then click ↻ Run report.</div>';
   if (t === 'card') rpCardList();
-  if (t === 'po') fetchAll(function(){ var q = sb.from('po_headers').select('fund_cluster'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('fund_cluster'); }).then(function(rows){
+  if (t === 'po') fetchAll(function(){ var q = sb.from('po_headers').select('fund_cluster'); if (myUnitList()) q = q.in('category', myUnitList()); return q.order('fund_cluster'); }).then(function(rows){
     var seen = {}, opts = rows.map(function(r){ return r.fund_cluster; }).filter(function(f){ if (!f || seen[f]) return false; seen[f] = true; return true; });
     var el = document.getElementById('rpFund'); if (el) el.innerHTML = '<option value="">All funds</option>' + apOpt(opts);
   }).catch(function(){});
@@ -6359,17 +6438,17 @@ function rpSwitch(t){
 }
 // Stock unit filter — unit users are locked to their own unit.
 function rpSUField(){
-  return '<div class="ap-f"><label>Stock Unit</label><select id="rpSU"' + (ME.unit ? ' disabled' : '') + '>' +
-    (ME.unit ? '' : '<option value="">All units</option>') + apOpt(STOCK_UNITS, ME.unit || '') + '</select></div>';
+  return '<div class="ap-f"><label>Stock Unit</label><select id="rpSU"' + (u1() ? ' disabled' : '') + '>' +
+    (ME.unit ? '' : '<option value="">All units</option>') + apOpt(myCats(STOCK_UNITS), ME.unit || '') + '</select></div>';
 }
-function rpSU(){ return ME.unit || apVal('rpSU') || null; }
+function rpSU(){ return u1() || apVal('rpSU') || (ME.unit || null); }
 function rpSUText(){ var u = rpSU(); return u ? ' · ' + u : ' · all units'; }
 
 function rpCardList(){
   var m = apVal('rpMode'), dl = document.getElementById('rpKeyList'); if (!dl) return;
   if (m === 'item') dl.innerHTML = AP_LISTS.items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('');
   if (m === 'end_user') dl.innerHTML = AP_LISTS.eu.map(function(e){ return '<option value="' + esc(e.end_user_name) + '"></option>'; }).join('');
-  if (m === 'po') fetchAll(function(){ var q = sb.from('po_headers').select('po_number'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('po_number', { ascending: false }); })
+  if (m === 'po') fetchAll(function(){ var q = sb.from('po_headers').select('po_number'); if (myUnitList()) q = q.in('category', myUnitList()); return q.order('po_number', { ascending: false }); })
     .then(function(rows){ dl.innerHTML = rows.map(function(r){ return '<option value="' + esc(r.po_number) + '"></option>'; }).join(''); }).catch(function(){});
 }
 
@@ -6498,12 +6577,14 @@ async function rpRun(){
       var sop4 = await fetchAll(function(){ return sb.from('v_sop_monitoring').select('id,po_number,sop_status,updated_at').order('id'); }).catch(function(){ return []; }), rec4 = {};
       sop4.forEach(function(r){ var k = String(r.po_number || '').trim().toUpperCase(); if (!k) return;
         var o = rec4[k]; if (!o || (!o.id && r.id) || (!!r.id === !!o.id && String(r.updated_at || '') > String(o.updated_at || ''))) rec4[k] = r; });
+      var pa4 = {}; (await fetchAll(function(){ return sb.from('v_po_status_app').select('po_number,po_status_app').order('po_number'); }).catch(function(){ return []; }))
+        .forEach(function(r){ pa4[r.po_number] = r.po_status_app; });
       var sopOf = function(l){ var r = rec4[String(l.po_number || '').trim().toUpperCase()]; return r ? (r.sop_status || '') : ''; };
       pl4 = pl4.filter(function(l){ return (!dl4 || l.delivery_status === dl4) && (!q4 || (l.po_number + ' ' + l.item_code + ' ' + (l.po_description || '')).toLowerCase().indexOf(q4) !== -1); });
       RP_CUR = { title: 'PO Items Status', sub: 'As of ' + toMDY(today) + rpSUText() + (dl4 ? ' · ' + dl4 : ''),
         kv: [['PO items', pl4.length], ['POs', sopUniq(pl4.map(function(l){ return l.po_number; })).length]],
         sections: [{ cols: ['MMS_LINE_ID','PO No.','Unit','Supplier','PO Date','Code','Description','PO Status Trail','SOP Status','PO Status (app)','Delivery Status','Qty Ordered','Qty Delivered','Qty Cancelled','Balance'],
-          rows: pl4.map(function(l){ var so = sopOf(l); return [l.po_line_id, l.po_number, l.category, l.supplier, l.po_date ? toMDY(l.po_date) : '', l.item_code, l.po_description || '', l.trail_status, so, so || l.trail_status, l.delivery_status,
+          rows: pl4.map(function(l){ var so = sopOf(l); return [l.po_line_id, l.po_number, l.category, l.supplier, l.po_date ? toMDY(l.po_date) : '', l.item_code, l.po_description || '', l.trail_status, so, pa4[l.po_number] || so || l.trail_status, l.delivery_status,
             Number(l.qty_ordered), Number(l.qty_delivered), Number(l.qty_cancelled), Number(l.balance)]; }) }] };
     }
     if (t === 'loc'){
@@ -6569,7 +6650,7 @@ async function rpRun(){
         sections: [{ cols: ['Month','Receipts','Qty Received','RIS Issued','Qty Issued'], rows: m.map(function(x){ return [x.month, x.receipts, x.qty_received, x.ris_issued, x.qty_issued]; }) }] };
     }
     if (t === 'po'){
-      var unit = ME.unit || apVal('rpUnit'), st = apVal('rpPoSt'), pf = apVal('rpFrom'), pt = apVal('rpTo'), fund = apVal('rpFund'), trailF = apVal('rpTrail');
+      var unit = u1() || apVal('rpUnit') || ME.unit, st = apVal('rpPoSt'), pf = apVal('rpFrom'), pt = apVal('rpTo'), fund = apVal('rpFund'), trailF = apVal('rpTrail');
       var supF = apVal('rpSup').toUpperCase(), supOk = function(v){ return !supF || String(v || '').toUpperCase().indexOf(supF) !== -1; };
       var res = await Promise.all([
         fetchAll(function(){ return sb.from('v_po_lines').select('po_number,category,txn_type,fund_cluster,supplier,po_date,due_date,overall_status,trail_status,qty_ordered,qty_delivered,balance,total_amount,noa_number').order('po_date', { ascending: false }).order('po_number'); }),
@@ -7328,7 +7409,7 @@ function monRender(){
     return '<button class="mn-chip' + (on ? ' on' : '') + '" style="--c:' + x.c + ';--b:' + x.b + '" onclick="MON_ST=' + (on ? '\'\'' : '\'' + x.s + '\'') + ';monRender()"><span>' + x.i + '</span><b>' + (cnt[x.s] || 0) + '</b>' + esc(x.s) + '</button>'; };
   document.getElementById('sopBody').innerHTML =
     '<div class="mn-chips"><button class="mn-chip' + (!MON_ST ? ' on' : '') + '" style="--c:#1a3a5c;--b:#eef3f9" onclick="MON_ST=\'\';monRender()"><span>📋</span><b>' + vis.length + '</b>ALL</button>' + MON_STATUS.map(chip).join('') + '</div>' +
-    '<div class="ap-search">' + (ME.unit ? '' : '<select onchange="MON_UNIT=this.value;monRender()"><option value="">All units</option>' + PO_CATEGORIES.map(function(u){ return '<option' + (MON_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>') +
+    '<div class="ap-search">' + (u1() ? '' : '<select onchange="MON_UNIT=this.value;monRender()"><option value="">' + (ME.unit ? 'All my units' : 'All units') + '</option>' + myCats(PO_CATEGORIES).map(function(u){ return '<option' + (MON_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>') +
       '<input type="text" id="monQ" placeholder="Search PO, supplier, category, remarks, folder…" oninput="monRows()"/>' +
       (CAN_EDIT ? '<button class="sx-btn green sm" onclick="monEdit(0)">＋ Add PO</button>' : '') + '<button class="sx-btn blue sm" onclick="monExcel()">⬇ Excel</button></div>' +
     '<div id="monEd"></div>' +
@@ -7415,7 +7496,7 @@ function monEdit(id, po, preset){
       fld('PO Number', 'mnPo', e.po_number || '') + fld('Supplier', 'mnSup', e.supplier || '') + fld('Date Received', 'mnDr', e.date_received || '', { type: 'date' }) +
       fld('Category', 'mnCat', e.category || '') + fld('Amount', 'mnAmt', e.amount != null ? e.amount : '') + fld('Fund Cluster', 'mnFund', e.fund_cluster || '') +
       fld('Transmitted to', 'mnTo', e.transmitted_to || '') + fld('Folder', 'mnFol', e.folder || '') +
-      (isNew && !ME.unit ? '<div class="ap-f"><label>Unit</label><select id="mnUnit">' + PO_CATEGORIES.map(function(u){ return '<option' + ((e.unit || 'SUPPLIES UNIT') === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' : '') +
+      (isNew && !u1() ? '<div class="ap-f"><label>Unit</label><select id="mnUnit">' + myCats(PO_CATEGORIES).map(function(u){ return '<option' + ((e.unit || ME.unit || 'SUPPLIES UNIT') === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' : '') +
     '</div>' +
     (ed ? '<div class="mn-stbox"><div class="ap-f"><label>Status</label><select id="mnSt" onchange="monStChanged()">' + MON_STATUS.concat(MON_OTHER).filter(function(x){ return x.s !== 'ON GOING' || e.sop_status === 'ON GOING' || (e.unit || '') === 'EQUIPMENT'; }).map(function(x){ return '<option' + (x.s === e.sop_status ? ' selected' : '') + '>' + esc(x.s) + '</option>'; }).join('') + '</select></div>' +
       '<div class="ap-f mn-stnew" style="display:none"><label>Date of this status</label><input type="date" id="mnStD" value="' + lkToday() + '"/></div>' +
@@ -7615,7 +7696,7 @@ async function monSave(){
     sop_status: st, fund_cluster: apVal('mnFund'), transmitted_to: apVal('mnTo'), folder: apVal('mnFol'),
     lacking: lkFormat(MON_LK), remarks: document.getElementById('mnRem').value,
     status_date: chg || !e.id ? (apVal('mnStD') || lkToday()) : '', status_note: chg ? apVal('mnStN') : '',
-    unit: ME.unit || apVal('mnUnit') || e.unit || '' };
+    unit: u1() || apVal('mnUnit') || e.unit || ME.unit || '' };
   var r = await sb.rpc('save_sop_tracking', { p: p });
   if (r.error){ monToast(errText(r.error), true); return; }
   var okText = 'PO ' + p.po_number + (r.data.changes ? ' saved — logged in its edit trail.' : ' — no changes.');
@@ -7846,7 +7927,7 @@ var DOC_TYPES = [
   { code: 'DR',             icon: '🧾', label: 'DR (Delivery Receipt)',     short: 'DR',          color: '#2471a3', bg: '#ebf5fb', group: 'Catering' }
 ];
 // Attendance and DR are for CATERING only
-function docTypesFor(){ return DOC_TYPES.filter(function(t){ return t.group !== 'Catering' || !ME.unit || ME.unit === 'CATERING'; }); }
+function docTypesFor(){ return DOC_TYPES.filter(function(t){ return t.group !== 'Catering' || !ME.unit || myUnitList().indexOf('CATERING') !== -1; }); }
 var DOC_EFFECT = { EXTENSION: 'Its new delivery date becomes the SOP deadline.', WAIVE: 'The PO gets no penalties on the SOP.', BANK_GUARANTEE: 'The 1% retention is waived on the SOP.',
   CHANGE_BRAND: 'For record only.', STAGGERED: 'For record only.', TCFG: 'For record only.', AFFIDAVIT: 'For record only.',
   CANCELLATION: 'For record only (notice of cancellation).', OTHER_LETTER: 'For record only — type what the letter is about in the Note.',
@@ -7858,8 +7939,8 @@ async function docInit(){ await docLoad(); docRender(); }
 async function docLoad(){
   try {
     var res = await Promise.all([
-      fetchAll(function(){ var q = sb.from('v_po_documents').select('*'); if (ME.unit) q = q.eq('unit', ME.unit); return q.order('date_received', { ascending: false }).order('id', { ascending: false }); }),
-      fetchAll(function(){ var q = sb.from('po_headers').select('po_number,supplier,category'); if (ME.unit) q = q.eq('category', ME.unit); return q.order('po_number', { ascending: false }); }),
+      fetchAll(function(){ var q = sb.from('v_po_documents').select('*'); if (myUnitList()) q = q.in('unit', myUnitList()); return q.order('date_received', { ascending: false }).order('id', { ascending: false }); }),
+      fetchAll(function(){ var q = sb.from('po_headers').select('po_number,supplier,category'); if (myUnitList()) q = q.in('category', myUnitList()); return q.order('po_number', { ascending: false }); }),
       fetchAll(function(){ return sb.from('suppliers').select('supplier_name').order('supplier_name'); })
     ]);
     DOC_ROWS = res[0]; DOC_POS = res[1]; DOC_SUP = res[2].map(function(x){ return x.supplier_name; });
@@ -7874,7 +7955,7 @@ function docRender(){
   var t = DOC_TAB === 'ALL' ? null : docType(DOC_TAB), e = DOC_EDIT || {};
   var formType = e.doc_type || (t ? t.code : 'STAGGERED');
   document.getElementById('docBody').innerHTML =
-    '<div class="dc-cards"><button class="dc-card all' + (DOC_TAB === 'ALL' ? ' on' : '') + '" style="--c:#1a3a5c;--b:#eef3f9" onclick="docTab(\'ALL\')"><span class="i">📁</span><span class="n">' + vis.length + '</span><span class="l">All documents' + (ME.unit ? ' — ' + esc(ME.unit) : DOC_UNIT ? ' — ' + esc(DOC_UNIT) : ' — all units') + '</span></button>' +
+    '<div class="dc-cards"><button class="dc-card all' + (DOC_TAB === 'ALL' ? ' on' : '') + '" style="--c:#1a3a5c;--b:#eef3f9" onclick="docTab(\'ALL\')"><span class="i">📁</span><span class="n">' + vis.length + '</span><span class="l">All documents' + (u1() ? ' — ' + esc(u1()) : DOC_UNIT ? ' — ' + esc(DOC_UNIT) : ' — all units') + '</span></button>' +
       '<div class="dc-grp">Letters</div>' + DOC_TYPES.filter(function(x){ return x.group === 'Letters'; }).map(card).join('') +
       '<div class="dc-grp">Others</div>' + DOC_TYPES.filter(function(x){ return x.group === 'Others'; }).map(card).join('') +
       (docTypesFor().some(function(x){ return x.group === 'Catering'; }) ? '<div class="dc-grp">Catering</div>' + DOC_TYPES.filter(function(x){ return x.group === 'Catering'; }).map(card).join('') : '') + '</div>' +
@@ -7883,8 +7964,8 @@ function docRender(){
     (CAN_EDIT ? '<div class="sx-card dc-form" style="--c:' + docType(formType).color + '"><div class="sx-h">' + (e.id ? '✎ Edit document' : '➕ Record a document received') + '</div><div class="sx-grid">' +
       '<div class="ap-f"><label>Document</label><select id="docType" onchange="docTypeChanged()">' + docTypesFor().map(function(x){ return '<option value="' + x.code + '"' + (x.code === formType ? ' selected' : '') + '>' + x.icon + ' ' + esc(x.label) + '</option>'; }).join('') + '</select></div>' +
       apField('Date received', 'docDate', e.date_received || ymd(new Date()), { type: 'date' }) +
-      '<div class="ap-f"><label>Unit</label><select id="docUnit"' + (ME.unit ? ' disabled' : '') + '><option value="">— pick unit —</option>' + PO_CATEGORIES.map(function(u){
-        var sel = (e.unit || ME.unit || (docType(formType).group === 'Catering' ? 'CATERING' : DOC_UNIT)) === u; return '<option' + (sel ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="ap-f"><label>Unit</label><select id="docUnit"' + (u1() ? ' disabled' : '') + '><option value="">— pick unit —</option>' + myCats(PO_CATEGORIES).map(function(u){
+        var sel = (e.unit || u1() || (docType(formType).group === 'Catering' ? 'CATERING' : DOC_UNIT)) === u; return '<option' + (sel ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select></div>' +
       '<div class="ap-f"><label>PO number (blank if no PO yet)</label><input type="text" id="docPo" list="docPoDl" value="' + esc(e.po_number || '') + '" oninput="docPoPicked()"/></div>' +
       '<div class="ap-f"><label>Supplier</label><input type="text" id="docSup" list="docSupDl" value="' + esc(e.supplier || '') + '"/></div>' +
       '<div class="ap-f" id="docDlBox"' + (formType === 'EXTENSION' ? '' : ' style="display:none"') + '><label>New delivery date (approved)</label><input type="date" id="docNewDl" value="' + esc(e.new_deadline || '') + '"/></div>' +
@@ -7893,7 +7974,7 @@ function docRender(){
       '<div class="sx-actions"><button class="sx-btn green" onclick="docSave()">💾 ' + (e.id ? 'Save changes' : 'Add document') + '</button>' +
       (e.id ? '<button class="sx-btn gray" onclick="DOC_EDIT=null;docRender()">Cancel</button>' : '') + '</div></div>' : '') +
     '<div class="sx-card"><div class="sx-h">' + (t ? t.icon + ' ' + esc(t.label) : '📁 All documents') +
-      (ME.unit ? '' : '<select class="dc-u" onchange="DOC_UNIT=this.value;docRender()"><option value="">All units</option>' + PO_CATEGORIES.map(function(u){ return '<option' + (DOC_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>') +
+      (u1() ? '' : '<select class="dc-u" onchange="DOC_UNIT=this.value;docRender()"><option value="">' + (ME.unit ? 'All my units' : 'All units') + '</option>' + myCats(PO_CATEGORIES).map(function(u){ return '<option' + (DOC_UNIT === u ? ' selected' : '') + '>' + esc(u) + '</option>'; }).join('') + '</select>') +
       '<input type="text" id="docQ" class="dc-q" placeholder="Search PO, supplier, note…" oninput="docRows()"/></div>' +
       '<div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>Date Received</th><th>Document</th><th>Unit</th><th>PO Number</th><th>Supplier</th><th>Remarks</th><th>Details</th><th></th></tr></thead><tbody id="docB"></tbody></table></div>' +
       '<p class="sx-hint">Remarks are automatic: <b>NO PO YET</b> → <b>WITH MATCH PO</b> → <b>USED</b> (the PO already has an SOP).</p></div>';
@@ -7924,7 +8005,7 @@ function docRows(){
 }
 function docEdit(id){ DOC_EDIT = DOC_ROWS.filter(function(r){ return r.id === id; })[0] || null; docRender(); window.scrollTo(0, 0); }
 async function docSave(){
-  var p = { id: DOC_EDIT ? DOC_EDIT.id : null, unit: ME.unit || apVal('docUnit'), doc_type: apVal('docType'), date_received: apVal('docDate'), po_number: apVal('docPo'), supplier: apVal('docSup'),
+  var p = { id: DOC_EDIT ? DOC_EDIT.id : null, unit: u1() || apVal('docUnit'), doc_type: apVal('docType'), date_received: apVal('docDate'), po_number: apVal('docPo'), supplier: apVal('docSup'),
     new_deadline: apVal('docNewDl'), note: apVal('docNote') };
   var r = await sb.rpc('save_po_document', { p: p });
   if (r.error){ docMsg('err', esc(errText(r.error))); return; }
