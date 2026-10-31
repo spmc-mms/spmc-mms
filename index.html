@@ -5719,12 +5719,18 @@ async function apPoFreeSave(id){
   apMsg('ok', '✅ 🎁 Free goods added to ' + esc(r.data.receive_id) + ' — on its IAR as "— FREE GOODS", in stock at zero cost. The PO balance did not change.');
 }
 // change the unit of a PO (coded units only) — received stock moves with it if none was issued yet
-var AP_UNIT_SWAP = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM'];
+var AP_UNIT_SWAP = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM', 'EQUIPMENT', 'HARDWARE', 'CATERING'];   // update 79: all units
+var AP_UNIT_CODED = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM'];
 function apPoUnit(sel){
   var h = AP_CUR.h, to = sel.value;
-  if (!confirm('Change PO ' + h.po_number + ' from ' + h.category + ' to ' + to + '?\n\nIts items (and any stock already received from it) will belong to ' + to + '.')){ sel.value = h.category; return; }
+  var both = AP_UNIT_CODED.indexOf(h.category) !== -1 && AP_UNIT_CODED.indexOf(to) !== -1;
+  if (!confirm('Change PO ' + h.po_number + ' from ' + h.category + ' to ' + to + '?\n\n' + (both
+      ? 'Its items (and any stock already received from it) will belong to ' + to + '.'
+      : 'This is only possible while the PO is not yet received.\n' + (AP_UNIT_CODED.indexOf(to) !== -1
+          ? 'Typed items become "not yet coded" — assign their item codes on Receive.'
+          : 'Its items get ' + to + ' item codes (between EQUIPMENT and HARDWARE a real item code is kept).')))){ sel.value = h.category; return; }
   return apRpc('apv_po_change_unit', { p_po: h.po_number, p_unit: to },
-    function(d){ return 'PO ' + esc(h.po_number) + ' is now ' + esc(to) + (d.receipts ? ' — ' + d.receipts + ' receipt(s) and ' + d.batches + ' batch(es) moved too.' : '.'); },
+    function(d){ return 'PO ' + esc(h.po_number) + ' is now ' + esc(to) + (d.receipts ? ' — ' + d.receipts + ' receipt(s) and ' + d.batches + ' batch(es) moved too.' : '.') + (d.codes ? ' ' + d.codes + ' item code(s) changed for ' + esc(to) + '.' : ''); },
     function(){ return apPoOpen(h.po_number); }).then(function(){ if (AP_CUR && AP_CUR.h && AP_CUR.h.category !== to) sel.value = AP_CUR.h.category; });
 }
 function apPoRender(){
