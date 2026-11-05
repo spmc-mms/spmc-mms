@@ -175,6 +175,15 @@ tr.row-unclaimed{background:#fffaf0}
 .rsmi-doc .rsmi-recap-title{break-after:avoid;page-break-after:avoid}
 .rsmi-doc table.rsmi-table thead,.rsmi-doc table.rsmi-recap thead{display:table-header-group}
 .rsmi-doc table.rsmi-table tr,.rsmi-doc table.rsmi-recap tr{break-inside:avoid;page-break-inside:avoid}
+/* legal (8.5x13) form look: blank rows fill the page like the printed Appendix 64 (2026-11-05) */
+.rsmi-doc table.rsmi-table tbody td{height:0.25in}
+.rsmi-doc table.rsmi-recap2{width:100%;border-collapse:collapse;table-layout:fixed;margin:0}
+.rsmi-doc table.rsmi-recap2 td{border-left:1px solid #000;border-right:1px solid #000;font-size:6.8pt;line-height:1.12;padding:1.4px 3px;text-align:center;height:0.22in}
+.rsmi-doc table.rsmi-recap2 tr.rc-title td{border:1px solid #000;border-top:none;font-size:7pt;height:auto}
+.rsmi-doc table.rsmi-recap2 tr.rc-head td{border:1px solid #000;font-weight:bold;font-size:7.5pt;height:auto}
+.rsmi-doc table.rsmi-recap2 tr.rc-last td{border-bottom:1px solid #000}
+.rsmi-doc table.rsmi-recap2 tr{break-inside:avoid;page-break-inside:avoid}
+
 
 .lg-wrap{position:fixed;inset:0;background:linear-gradient(135deg,#1a3a5c 0%,#2d6a9f 60%,#1a3a5c 100%);align-items:center;justify-content:center;z-index:2000}
 .lg-box{width:100%;max-width:420px;padding:24px}
@@ -4110,7 +4119,8 @@ var RSMI_PRINT_CSS =
   '.rsmi-doc .rsmi-tail{break-inside:avoid;page-break-inside:avoid}' +
   '.rsmi-doc .rsmi-recap-title{break-after:avoid;page-break-after:avoid}' +
   '.rsmi-doc table.rsmi-table thead,.rsmi-doc table.rsmi-recap thead{display:table-header-group}' +
-  '.rsmi-doc table.rsmi-table tr,.rsmi-doc table.rsmi-recap tr{break-inside:avoid;page-break-inside:avoid}';
+  '.rsmi-doc table.rsmi-table tr,.rsmi-doc table.rsmi-recap tr{break-inside:avoid;page-break-inside:avoid}' +
+  '.rsmi-doc table.rsmi-table tbody td{height:0.25in}.rsmi-doc table.rsmi-recap2{width:100%;border-collapse:collapse;table-layout:fixed;margin:0}.rsmi-doc table.rsmi-recap2 td{border-left:1px solid #000;border-right:1px solid #000;font-size:6.8pt;line-height:1.12;padding:1.4px 3px;text-align:center;height:0.22in}.rsmi-doc table.rsmi-recap2 tr.rc-title td{border:1px solid #000;border-top:none;font-size:7pt;height:auto}.rsmi-doc table.rsmi-recap2 tr.rc-head td{border:1px solid #000;font-weight:bold;font-size:7.5pt;height:auto}.rsmi-doc table.rsmi-recap2 tr.rc-last td{border-bottom:1px solid #000}.rsmi-doc table.rsmi-recap2 tr{break-inside:avoid;page-break-inside:avoid}';
 
 // EQUIPMENT reports issuances on the RSPI (Report of Semi-Expendable Property
 // Issued); every other unit on the RSMI. Same flow, different form and numbering.
@@ -4230,6 +4240,7 @@ function rsmiStats_(risList){
 // print window (printRsmiPreview), and viewing a past RSMI
 // (viewRsmiClick) — one function, three call sites, always the same
 // document.
+var RSMI_FORM_ROWS = 18, RSMI_RECAP_ROWS = 12;   // rows on the printed legal-size form
 function renderRsmiTemplate(o){
   var isRspi = o.docType === 'RSPI', L = REPORT_DOC_LABELS[isRspi ? 'RSPI' : 'RSMI'];
   var lines = rsmiFlattenLines_(o.risList, isRspi);
@@ -4249,13 +4260,17 @@ function renderRsmiTemplate(o){
           + '<td></td>'
         + '</tr>';
       }).join('')
-    : '<tr><td colspan="8" class="rsmi-empty">No items.</td></tr>';
+    : '';
+  // the printed form (legal 8.5 x 13) has 18 item rows — blank rows fill up to that
+  for (var pad = lines.length; pad < RSMI_FORM_ROWS; pad++) rowsHtml += '<tr><td></td><td></td><td></td><td class="rsmi-desc"></td><td></td><td></td><td></td><td></td></tr>';
 
-  var recapHtml = recap.length
-    ? recap.map(function(r){
-        return '<tr><td>' + esc(offCode(r.code)) + '</td><td>' + esc(r.qty) + '</td><td></td><td></td><td></td></tr>';
-      }).join('')
-    : '<tr><td colspan="5" class="rsmi-empty">No items.</td></tr>';
+  // Recapitulation laid out under the same 8 columns as the form: Stock No. / Quantity
+  // under Responsibility Center Code / Stock No.; Unit Cost, Total Cost, UACS Code on the right
+  var recapRows = recap.map(function(r){ return { code: offCode(r.code), qty: r.qty }; });
+  while (recapRows.length < RSMI_RECAP_ROWS) recapRows.push({ code: '', qty: '' });
+  var recapHtml = recapRows.map(function(r, i){
+    return '<tr' + (i === recapRows.length - 1 ? ' class="rc-last"' : '') + '><td></td><td>' + esc(r.code) + '</td><td>' + esc(r.qty) + '</td><td></td><td colspan="2"></td><td></td><td></td></tr>';
+  }).join('');
 
   return ''
     + '<div class="rsmi-doc">'
@@ -4287,11 +4302,12 @@ function renderRsmiTemplate(o){
     +       '<th>Unit</th><th>' + L.col6 + '</th><th>Unit Cost</th><th>Amount</th></tr></thead>'
     +     '<tbody>' + rowsHtml + '</tbody>'
     +   '</table>'
-    +   '<div class="rsmi-recap-title">Recapitulation</div>'
-    +   '<table class="rsmi-recap">'
-    +     '<colgroup><col style="width:22%"><col style="width:18%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>'
-    +     '<thead><tr><th>Stock No.</th><th>Quantity</th><th>Unit Cost</th><th>Total Cost</th><th>UACS Code</th></tr></thead>'
-    +     '<tbody>' + recapHtml + '</tbody>'
+    +   '<table class="rsmi-recap2">'
+    +     '<colgroup><col style="width:11%"><col style="width:11.2%"><col style="width:8.6%"><col style="width:39.2%">'
+    +       '<col style="width:7.4%"><col style="width:6.6%"><col style="width:7.2%"><col style="width:8.7%"></colgroup>'
+    +     '<tbody><tr class="rc-title"><td></td><td colspan="2">Recapitulation</td><td></td><td></td><td colspan="3">Recapitulation</td></tr>'
+    +     '<tr class="rc-head"><td style="border-top:none;border-bottom:none"></td><td>' + (isRspi ? 'Semi-expendable No.' : 'Stock No.') + '</td><td>Quantity</td><td style="border-top:none;border-bottom:none"></td><td colspan="2">Unit Cost</td><td>Total Cost</td><td>UACS Code</td></tr>'
+    +     recapHtml + '</tbody>'
     +   '</table>'
     +   '<div class="rsmi-tail">' // certification + signature + footer, kept as one unbreakable unit — see the pagination CSS comment above RSMI_PRINT_CSS
     +     '<div class="rsmi-cert">I hereby certify to the correctness of the above information.</div>'
