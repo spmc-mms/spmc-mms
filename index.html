@@ -1323,6 +1323,11 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
   <div class="mo-box rsmi-preview">
     <h3>🧾 <span id="rsmiPrevType">RSMI</span> Print Preview — <span id="rsmiPrevNo">—</span></h3>
     <div class="rsmi-preview-summary" id="rsmiPrevSummary"></div>
+    <div id="rsmiManualBox" style="display:none;margin:6px 0 10px;padding:8px 10px;background:#f6f8fc;border:1px solid #dbe3f0;border-radius:6px;font-size:.88rem">
+      <label style="cursor:pointer"><input type="checkbox" id="rsmiManualChk" onchange="rsmiManualToggle()"/> <b>Manual <span class="rsmiManualType">RSMI</span> No.</b> — type the number yourselves</label>
+      <span id="rsmiManualWrap" style="display:none;margin-left:10px"><input type="text" id="rsmiManualNo" placeholder="e.g. 2026-11-0330F" oninput="rsmiManualInput()" style="width:190px;text-transform:uppercase"/></span>
+      <div style="color:#667;font-size:.78rem;margin-top:3px">Not ticked → the app gives the next number (<span id="rsmiAutoNo">—</span>). A typed number does not use up the app's number.</div>
+    </div>
     <div class="rsmi-preview-content" id="rsmiPrevContent"></div>
     <div class="mo-actions">
       <button class="btn-cancel" id="btnCloseRsmiPreview" onclick="closeRsmiPreviewModal()">Cancel</button>
@@ -1954,8 +1959,12 @@ async function previewRsmiClick(){
 async function saveRsmiClick(){
   if (!RSMI_PREVIEW || RSMI_PREVIEW.mode !== 'create') return;
   var btn = document.getElementById('btnSaveRsmi');
+  var manualNo = rsmiManualOn() ? String(document.getElementById('rsmiManualNo').value || '').replace(/\s+/g, '').toUpperCase() : '';
+  if (rsmiManualOn() && !manualNo){ showMsg('err', 'Type the ' + (RSMI_PREVIEW.docType || 'RSMI') + ' No. (or untick "Manual ' + (RSMI_PREVIEW.docType || 'RSMI') + ' No.").'); document.getElementById('rsmiManualNo').focus(); return; }
   btn.disabled = true; btn.textContent = 'Saving…';
-  var res = await sb.rpc('save_rsmi', { p_ris_nos: RSMI_PREVIEW.risNos });
+  var res = manualNo
+    ? await sb.rpc('save_rsmi_manual', { p_ris_nos: RSMI_PREVIEW.risNos, p_rsmi_no: manualNo })
+    : await sb.rpc('save_rsmi', { p_ris_nos: RSMI_PREVIEW.risNos });
   if (res.error){
     btn.disabled = false; btn.textContent = '💾 Save ' + (RSMI_PREVIEW.docType || 'RSMI');
     showMsg('err', errText(res.error));
@@ -1965,7 +1974,7 @@ async function saveRsmiClick(){
   closeRsmiPreviewModal();
   var box = document.getElementById('rsmiCreateMsg');
   box.className = 'msg ok';
-  box.innerHTML = esc(d.doc_type || 'RSMI') + ' <b>' + esc(d.rsmi_no) + '</b> saved — ' + d.ris_count + ' RIS. ' +
+  box.innerHTML = esc(d.doc_type || 'RSMI') + ' <b>' + esc(d.rsmi_no) + '</b>' + (d.manual ? ' (manual No.)' : '') + ' saved — ' + d.ris_count + ' RIS. ' +
     '<a href="#" onclick="viewRsmiClick(event,\'' + esc(d.rsmi_no).replace(/'/g,"\\'") + '\')">👁 View / Print →</a>';
   box.style.display = 'block';
   RSMI_CHECKED = {};
@@ -1977,12 +1986,14 @@ async function loadRsmiLog(){
   tb.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
   try {
     RSMI_LOG_DATA = await fetchAll(function(){ var q = sb.from('v_rsmi_log').select('*'); if (myUnitList()) q = q.in('unit', myUnitList()); return q.order('rsmi_no', { ascending:false }); });
+    var manualSet = {};
+    try { var mres = await sb.from('rsmi').select('rsmi_no').eq('manual', true); (mres.data || []).forEach(function(m){ manualSet[m.rsmi_no] = true; }); } catch(e){}
     RSMI_OPEN = {};
     tb.innerHTML = RSMI_LOG_DATA.length
       ? RSMI_LOG_DATA.map(function(r){
           var no = esc(r.rsmi_no), noJs = no.replace(/'/g,"\\'");
           return '<tr class="rsmi-row" data-rsmi="'+no+'" onclick="toggleRsmiDetail(\''+noJs+'\')" title="Click to show the items in this RSMI">'+
-            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(u1() ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b></td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
+            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(u1() ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b>'+(manualSet[r.rsmi_no] ? ' <span style="font-size:.68rem;background:#fff3d6;color:#8a5a00;border-radius:3px;padding:0 4px" title="The number was typed (manual)">MANUAL</span>' : '')+'</td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
             '<td>'+esc(r.ris_nos)+'</td><td>'+esc(r.line_count)+'</td><td>'+esc(r.total_qty)+'</td><td>'+esc(r.encoded_by)+'</td>'+
             '<td><a href="#" class="ris-link" onclick="event.stopPropagation();viewRsmiClick(event,\''+noJs+'\')">👁 View</a></td></tr>'+
             '<tr class="rsmi-detail" id="detail_'+no+'" style="display:none"><td colspan="8"><div class="rsmi-detail-box">Loading…</div></td></tr>';
@@ -4328,7 +4339,14 @@ function renderReportDoc_(o){ return renderRsmiTemplate(o); }
 // can be selected/saved from there). Renders the document with
 // renderRsmiTemplate() and shows/hides the Save button based on mode.
 function openRsmiPreviewModal(data, risNos, mode){
-  RSMI_PREVIEW = { rsmiNo: data.rsmiNo, date: data.date, risList: data.risList, risNos: risNos || [], mode: mode, docType: data.docType || 'RSMI' };
+  RSMI_PREVIEW = { rsmiNo: data.rsmiNo, autoNo: data.rsmiNo, date: data.date, risList: data.risList, risNos: risNos || [], mode: mode, docType: data.docType || 'RSMI' };
+  var mb = document.getElementById('rsmiManualBox');
+  mb.style.display = mode === 'create' ? '' : 'none';
+  document.getElementById('rsmiManualChk').checked = false;
+  document.getElementById('rsmiManualWrap').style.display = 'none';
+  document.getElementById('rsmiManualNo').value = '';
+  document.getElementById('rsmiAutoNo').textContent = data.rsmiNo || '—';
+  Array.prototype.forEach.call(mb.querySelectorAll('.rsmiManualType'), function(e){ e.textContent = RSMI_PREVIEW.docType; });
   document.getElementById('rsmiPrevNo').textContent = data.rsmiNo;
   document.getElementById('rsmiPrevType').textContent = RSMI_PREVIEW.docType;
 
@@ -4349,6 +4367,23 @@ function openRsmiPreviewModal(data, risNos, mode){
   else { saveBtn.style.display = ''; saveBtn.disabled = false; saveBtn.textContent = '💾 Save ' + RSMI_PREVIEW.docType; }
 
   document.getElementById('moRsmiPreview').classList.add('show');
+}
+
+// Manual RSMI / RSPI No. (update 82): ticked → the typed number is used on Save
+function rsmiManualOn(){ var c = document.getElementById('rsmiManualChk'); return !!(c && c.checked); }
+function rsmiManualToggle(){
+  if (!RSMI_PREVIEW) return;
+  var on = rsmiManualOn();
+  document.getElementById('rsmiManualWrap').style.display = on ? '' : 'none';
+  if (on) document.getElementById('rsmiManualNo').focus();
+  rsmiManualInput();
+}
+function rsmiManualInput(){
+  if (!RSMI_PREVIEW) return;
+  var v = String(document.getElementById('rsmiManualNo').value || '').replace(/\s+/g, '').toUpperCase();
+  RSMI_PREVIEW.rsmiNo = rsmiManualOn() ? (v || '—') : RSMI_PREVIEW.autoNo;
+  document.getElementById('rsmiPrevNo').textContent = RSMI_PREVIEW.rsmiNo;
+  document.getElementById('rsmiPrevContent').innerHTML = renderReportDoc_(RSMI_PREVIEW);
 }
 
 function closeRsmiPreviewModal(){
@@ -6151,7 +6186,7 @@ async function apRsmiOpen(key){
 function apRsmiRender(){
   var c = AP_CUR;
   var html = apDl('apFreeRis', c.free.map(function(r){ return r.ris_no; })) +
-    '<div class="ap-h">' + esc(c.h.doc_type || 'RSMI') + ' ' + esc(c.h.rsmi_no) + (c.h.unit ? ' <span class="ap-tag">' + esc(c.h.unit) + '</span>' : '') + '</div><div class="ap-grid">' + apField('RSMI Date', 'apRmDate', c.h.rsmi_date, { type: 'date' }) + '</div>' +
+    '<div class="ap-h">' + esc(c.h.doc_type || 'RSMI') + ' ' + esc(c.h.rsmi_no) + (c.h.unit ? ' <span class="ap-tag">' + esc(c.h.unit) + '</span>' : '') + (c.h.manual ? ' <span class="ap-tag" title="The number was typed (manual)">MANUAL</span>' : '') + '</div><div class="ap-grid">' + apField((c.h.doc_type || 'RSMI') + ' No.', 'apRmNo', c.h.rsmi_no) + apField('RSMI Date', 'apRmDate', c.h.rsmi_date, { type: 'date' }) + '</div>' +
     '<div class="ap-h">RIS on this RSMI</div><table class="ap-tbl"><thead><tr><th>RIS No.</th><th>Release Date</th><th>End User</th><th>Remove</th></tr></thead><tbody>' +
     c.ris.map(function(r){ var del = !!c.remove[r.ris_no];
       return '<tr class="' + (del ? 'del' : '') + '"><td><b>' + esc(r.ris_no) + '</b></td><td>' + esc(r.release_date || '') + '</td><td>' + esc(r.end_user || '') + '</td>' +
@@ -6165,8 +6200,16 @@ function apRsmiRender(){
     '<button class="ap-btn red" onclick="apRsmiDelete()">🗑 Delete RSMI</button></div>';
   document.getElementById('apEd').innerHTML = html; apLock();
 }
-function apRsmiSave(){
+async function apRsmiSave(){
   var c = AP_CUR;
+  var newNo = String(apVal('apRmNo') || '').replace(/\s+/g, '').toUpperCase();
+  if (!newNo){ apMsg('err', 'The ' + esc(c.h.doc_type || 'RSMI') + ' No. cannot be blank.'); return; }
+  if (newNo !== c.h.rsmi_no){
+    if (!confirm('Change ' + (c.h.doc_type || 'RSMI') + ' No. ' + c.h.rsmi_no + ' → ' + newNo + '? Its RIS will show the new number. This is logged in the Edit Log.')) return;
+    var rn = await sb.rpc('apv_rsmi_rename', { p_old: c.h.rsmi_no, p_new: newNo });
+    if (rn.error){ apMsg('err', esc(errText(rn.error))); return; }
+    c.h.rsmi_no = rn.data.rsmi_no; c.h.manual = true; RSMI_DETAIL_CACHE = {};
+  }
   return apRpc('apv_rsmi_save', { p: { rsmi_no: c.h.rsmi_no, rsmi_date: apVal('apRmDate'),
       remove_ris: Object.keys(c.remove).filter(function(k){ return c.remove[k]; }), add_ris: c.add.map(function(a){ return String(a).trim(); }).filter(Boolean) } },
     function(d){ return 'RSMI ' + esc(d.rsmi_no) + ' saved.'; }, function(d){ ISS_LOG_DATA = []; return apRsmiOpen(d.rsmi_no); });
