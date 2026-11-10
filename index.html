@@ -1336,6 +1336,9 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
       <label style="cursor:pointer"><input type="checkbox" id="rsmiManualChk" onchange="rsmiManualToggle()"/> <b>Manual <span class="rsmiManualType">RSMI</span> No.</b> — type the number yourselves</label>
       <span id="rsmiManualWrap" style="display:none;margin-left:10px"><input type="text" id="rsmiManualNo" placeholder="e.g. 2026-11-0330F" oninput="rsmiManualInput()" style="width:190px;text-transform:uppercase"/></span>
       <div style="color:#667;font-size:.78rem;margin-top:3px">Not ticked → the app gives the next number (<span id="rsmiAutoNo">—</span>). A typed number does not use up the app's number.</div>
+      <div style="margin-top:7px"><label style="cursor:pointer"><input type="checkbox" id="rsmiDateChk" onchange="rsmiDateToggle()"/> <b>Select <span class="rsmiManualType">RSMI</span> Date</b> — the day it will be submitted to Accounting</label>
+      <span id="rsmiDateWrap" style="display:none;margin-left:10px"><input type="date" id="rsmiDateIn" onchange="rsmiDateToggle()"/></span></div>
+      <div style="color:#667;font-size:.78rem;margin-top:3px">Not ticked → today. The automatic number follows the month of the date.</div>
     </div>
     <div class="rsmi-preview-content" id="rsmiPrevContent"></div>
     <div class="mo-actions">
@@ -1970,9 +1973,11 @@ async function saveRsmiClick(){
   var btn = document.getElementById('btnSaveRsmi');
   var manualNo = rsmiManualOn() ? String(document.getElementById('rsmiManualNo').value || '').replace(/\s+/g, '').toUpperCase() : '';
   if (rsmiManualOn() && !manualNo){ showMsg('err', 'Type the ' + (RSMI_PREVIEW.docType || 'RSMI') + ' No. (or untick "Manual ' + (RSMI_PREVIEW.docType || 'RSMI') + ' No.").'); document.getElementById('rsmiManualNo').focus(); return; }
+  var selDate = rsmiSelDate();
+  if (rsmiDateOn() && !selDate){ showMsg('err', 'Pick the ' + (RSMI_PREVIEW.docType || 'RSMI') + ' Date (or untick "Select ' + (RSMI_PREVIEW.docType || 'RSMI') + ' Date").'); document.getElementById('rsmiDateIn').focus(); return; }
   btn.disabled = true; btn.textContent = 'Saving…';
-  var res = manualNo
-    ? await sb.rpc('save_rsmi_manual', { p_ris_nos: RSMI_PREVIEW.risNos, p_rsmi_no: manualNo })
+  var res = (manualNo || selDate)
+    ? await sb.rpc('save_rsmi_ex', { p_ris_nos: RSMI_PREVIEW.risNos, p_rsmi_no: manualNo || null, p_date: selDate || null })
     : await sb.rpc('save_rsmi', { p_ris_nos: RSMI_PREVIEW.risNos });
   if (res.error){
     btn.disabled = false; btn.textContent = '💾 Save ' + (RSMI_PREVIEW.docType || 'RSMI');
@@ -1983,7 +1988,7 @@ async function saveRsmiClick(){
   closeRsmiPreviewModal();
   var box = document.getElementById('rsmiCreateMsg');
   box.className = 'msg ok';
-  box.innerHTML = esc(d.doc_type || 'RSMI') + ' <b>' + esc(d.rsmi_no) + '</b>' + (d.manual ? ' (manual No.)' : '') + ' saved — ' + d.ris_count + ' RIS. ' +
+  box.innerHTML = esc(d.doc_type || 'RSMI') + ' <b>' + esc(d.rsmi_no) + '</b>' + (d.manual ? ' (manual No.)' : '') + (selDate ? ' dated ' + esc(selDate) : '') + ' saved — ' + d.ris_count + ' RIS. ' +
     '<a href="#" onclick="viewRsmiClick(event,\'' + esc(d.rsmi_no).replace(/'/g,"\\'") + '\')">👁 View / Print →</a>';
   box.style.display = 'block';
   RSMI_CHECKED = {};
@@ -4362,6 +4367,10 @@ function openRsmiPreviewModal(data, risNos, mode){
   document.getElementById('rsmiManualWrap').style.display = 'none';
   document.getElementById('rsmiManualNo').value = '';
   document.getElementById('rsmiAutoNo').textContent = data.rsmiNo || '—';
+  RSMI_PREVIEW.today = data.date;
+  document.getElementById('rsmiDateChk').checked = false;
+  document.getElementById('rsmiDateWrap').style.display = 'none';
+  document.getElementById('rsmiDateIn').value = data.date || '';
   Array.prototype.forEach.call(mb.querySelectorAll('.rsmiManualType'), function(e){ e.textContent = RSMI_PREVIEW.docType; });
   document.getElementById('rsmiPrevNo').textContent = data.rsmiNo;
   document.getElementById('rsmiPrevType').textContent = RSMI_PREVIEW.docType;
@@ -4394,10 +4403,23 @@ function rsmiManualToggle(){
   if (on) document.getElementById('rsmiManualNo').focus();
   rsmiManualInput();
 }
+// Select RSMI / RSPI Date (update 83): ticked → the picked date; the automatic number takes its month
+function rsmiDateOn(){ var c = document.getElementById('rsmiDateChk'); return !!(c && c.checked); }
+function rsmiSelDate(){ return rsmiDateOn() ? (document.getElementById('rsmiDateIn').value || '') : ''; }
+function rsmiDateToggle(){
+  if (!RSMI_PREVIEW) return;
+  document.getElementById('rsmiDateWrap').style.display = rsmiDateOn() ? '' : 'none';
+  var d = rsmiSelDate() || RSMI_PREVIEW.today;
+  RSMI_PREVIEW.date = d;
+  var a = String(RSMI_PREVIEW.autoNo || '');
+  RSMI_PREVIEW.autoShown = (/^\d{4}-\d{2}-/.test(a) && d) ? d.slice(0, 7) + a.slice(7) : a;
+  document.getElementById('rsmiAutoNo').textContent = RSMI_PREVIEW.autoShown || '—';
+  rsmiManualInput();
+}
 function rsmiManualInput(){
   if (!RSMI_PREVIEW) return;
   var v = String(document.getElementById('rsmiManualNo').value || '').replace(/\s+/g, '').toUpperCase();
-  RSMI_PREVIEW.rsmiNo = rsmiManualOn() ? (v || '—') : RSMI_PREVIEW.autoNo;
+  RSMI_PREVIEW.rsmiNo = rsmiManualOn() ? (v || '—') : (RSMI_PREVIEW.autoShown || RSMI_PREVIEW.autoNo);
   document.getElementById('rsmiPrevNo').textContent = RSMI_PREVIEW.rsmiNo;
   document.getElementById('rsmiPrevContent').innerHTML = renderReportDoc_(RSMI_PREVIEW);
 }
