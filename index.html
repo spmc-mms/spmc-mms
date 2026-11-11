@@ -5758,12 +5758,20 @@ async function apPoOpen(key){
     if (!h.data){ apMsg('err', 'PO "' + esc(po) + '" was not found.'); return; }
     var lines = await fetchAll(function(){ return sb.from('v_po_lines').select('*').eq('po_number', po).order('po_line_id'); });
     if (PO_GROUPS_ON) await poLineGroups_(po, lines, 'po_line_id');
-    var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,po_line_id,date,iar_no').eq('po_number', po).order('date').order('receive_id'); });
+    var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,receipt_line_id,po_line_id,date,iar_no,qty_received,unit_cost').eq('po_number', po).order('date').order('receive_id'); });
+    // LOT breakdowns of this PO's deliveries (shown under their PO item)
+    var partsByLine = {};
+    try {
+      var rids = rl.map(function(x){ return x.receive_id; }).filter(function(v, i, a){ return a.indexOf(v) === i; });
+      var pr = rids.length ? await fetchAll(function(){ return sb.from('v_iar_lines').select('receipt_line_id,part_id,item_code,description,unit,qty,unit_cost,serial_no').in('receive_id', rids).not('part_id', 'is', null).order('part_id'); }) : [];
+      var byRl = {}; pr.forEach(function(p){ (byRl[p.receipt_line_id] = byRl[p.receipt_line_id] || []).push(p); });
+      rl.forEach(function(x){ if (x.po_line_id && byRl[x.receipt_line_id]) (partsByLine[x.po_line_id] = partsByLine[x.po_line_id] || []).push({ rl: x, pp: byRl[x.receipt_line_id] }); });
+    } catch(e){}
     var rcvByLine = {}; rl.forEach(function(x){ if (!x.po_line_id) return; var a = rcvByLine[x.po_line_id] = rcvByLine[x.po_line_id] || [];
       if (!a.some(function(y){ return y.id === x.receive_id; })) a.push({ id: x.receive_id, d: x.date, iar: x.iar_no }); });
     var legacy = {}; try { (await fetchAll(function(){ return sb.from('v_po_beg_balance').select('po_line_id,legacy_delivered,legacy_note,received_in_app').eq('po_number', po).order('po_line_id'); }))
       .forEach(function(x){ legacy[x.po_line_id] = x; }); } catch(e){}
-    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {}, legacy: legacy };
+    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {}, legacy: legacy, partsByLine: partsByLine };
     if (!PO_OPTS.MODE.length) await poLoadOpts();
     apPoRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
@@ -5860,6 +5868,9 @@ function apPoRender(){
           : '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#b9770e">NO DELIVERY YET</div>') + '</td>' +
       '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') +
         (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') + '</td></tr>';
+    (c.partsByLine && c.partsByLine[l.po_line_id] || []).forEach(function(b){
+      html += '<tr><td colspan="11" style="background:#f8fafc;padding:8px 10px 10px 24px"><div class="ap-ro" style="font-size:.75rem;margin-bottom:2px">from <a href="#" onclick="event.preventDefault();apRcvGo(\'' + esc(b.rl.receive_id) + '\')"><b>' + esc(b.rl.receive_id) + '</b></a>' + (b.rl.iar_no ? ' · IAR ' + esc(b.rl.iar_no) : '') + '</div>' + apRcvPartsHtml_(b.rl, b.pp) + '</td></tr>';
+    });
     var fg = c.free[l.po_line_id];
     if (fg){
       var rcvs = (c.rcvByLine[l.po_line_id] || []).slice().reverse();
@@ -6047,12 +6058,14 @@ function apRcvRender(){
   document.getElementById('apEd').innerHTML = html; apLock();
   apRcvAddRender();
 }
-// the pieces of a LOT breakdown: code, description, qty, unit cost, total, serial no. (cost and S/N editable by the Approver)
+// the pieces of a LOT breakdown: code, description, qty, unit cost, total, serial no. (description, cost and S/N editable by the Approver — update 84)
 function apRcvPartsHtml_(l, pp){
   var P = function(v){ return '₱' + (Number(v) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var can = ME.role === 'Approver', tot = 0, eq = (AP_CUR.h.category || '') === 'EQUIPMENT';
   var rows = pp.map(function(p){ var t = (Number(p.qty) || 0) * (Number(p.unit_cost) || 0); tot += t;
-    return '<tr><td><b>' + esc(String(p.item_code || '').indexOf('AUTO-') === 0 ? '—' : p.item_code) + '</b></td><td>' + esc(p.description || '') + '</td><td>' + esc(p.unit || '') + '</td>' +
+    return '<tr><td><b>' + esc(String(p.item_code || '').indexOf('AUTO-') === 0 ? '—' : p.item_code) + '</b></td><td>' +
+      (can ? '<input type="text" id="apPtD' + p.part_id + '" value="' + esc(p.description || '') + '" title="Description of this piece on this IAR (the item master list is not changed). Blank = the item\'s own description." style="width:100%;min-width:260px"/>' : esc(p.description || '')) +
+      '</td><td>' + esc(p.unit || '') + '</td>' +
       '<td class="r">' + p.qty + '</td>' +
       '<td class="r">' + (can ? '<input type="number" min="0" step="0.01" id="apPtU' + p.part_id + '" value="' + (Number(p.unit_cost) || 0) + '" style="width:110px;text-align:right"/>' : P(p.unit_cost)) + '</td>' +
       '<td class="r">' + P(t) + '</td>' +
@@ -6066,10 +6079,12 @@ function apRcvPartsHtml_(l, pp){
 }
 async function apPartSave(id){
   var u = apVal('apPtU' + id), sn = document.getElementById('apPtS' + id) ? apVal('apPtS' + id) : null;
-  var r = await sb.rpc('apv_part_save', { p_part_id: id, p_unit_cost: u === '' ? null : Number(u), p_serial: sn });
-  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_part_save/.test(errText(r.error)) ? ' — has update 72 been run?' : '')); return; }
-  apMsg('ok', r.data.changed ? '✅ Piece saved — in the Edit Log.' : 'No change.');
-  return apRcvOpen(AP_CUR.h.receive_id);
+  var ds = document.getElementById('apPtD' + id) ? apVal('apPtD' + id) : null;
+  var r = await sb.rpc('apv_part_save', { p_part_id: id, p_unit_cost: u === '' ? null : Number(u), p_serial: sn, p_description: ds });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_part_save|p_description/.test(errText(r.error)) ? ' — has update 84 been run?' : '')); return; }
+  var msg = r.data.changed ? '✅ Piece saved — in the Edit Log.' : 'No change.';
+  if (AP_CUR.kind === 'po') await apPoOpen(AP_CUR.h.po_number); else await apRcvOpen(AP_CUR.h.receive_id);
+  apMsg('ok', msg);
 }
 // ── add PO items / FREE GOODS to this receipt (update 48) ─────────────────────
 function apRcvStocked_(c){ var ph = c.poH || {}; return ph.category !== 'CATERING' && !isInOut(ph.txn_type); }
