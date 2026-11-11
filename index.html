@@ -7139,7 +7139,7 @@ async function sopFetch(po){
   var head = SOP_POS.filter(function(r){ return r.po_number === po; })[0];
   if (!head){ await sopLoad(); head = SOP_POS.filter(function(r){ return r.po_number === po; })[0]; }
   if (!head) throw new Error('PO ' + po + ' is not finalized FOR SOP.');
-  try { var hc = await sb.from('po_headers').select('item_class,project_name').eq('po_number', po).maybeSingle(); if (hc.data){ head.item_class = hc.data.item_class; head.project_name = hc.data.project_name; } } catch(e){}
+  try { var hc = await sb.from('po_headers').select('item_class,project_name,supplier_received_date,terms_days').eq('po_number', po).maybeSingle(); if (hc.data){ head.item_class = hc.data.item_class; head.project_name = hc.data.project_name; head.supplier_received_date = hc.data.supplier_received_date; head.terms_days = hc.data.terms_days; } } catch(e){}
   if (PO_GROUPS_ON) await poLineGroups_(po, res[0], 'po_line_id');
   var codes = sopUniq(res[0].map(function(l){ return l.item_code; }));
   var it = codes.length ? await fetchAll(function(){ return sb.from('items').select('item_code,tax_type').in('item_code', codes).order('item_code'); }) : [];
@@ -7389,6 +7389,33 @@ function sopFormChanged(id){
   }
   sopSumRender();
 }
+// Calendar days late computation (screen only, not saved): Due Date = Date PO Received by Supplier + Term;
+// checker = Due Date − date  (negative = days late, like the Excel =M54-M56)
+function sopLateBox(h){
+  var d = h.supplier_received_date || '', t = h.terms_days == null ? '' : String(h.terms_days);
+  var inp = function(id, v, type, w){ return '<input id="' + id + '" type="' + type + '" value="' + esc(v) + '" oninput="sopLateCalc()" onchange="sopLateCalc()" style="width:' + w + ';background:#fff8d6;border:1px solid #e6d27a;border-radius:4px;padding:2px 4px;font-size:.8rem"/>'; };
+  return '<div class="sp-help sp-late"><b>📅 Calendar days late computation</b>' +
+    '<table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:.8rem">' +
+    '<tr><td style="width:44%">PO received by supplier</td><td>' + inp('sopLtRec', d, 'date', '100%') + '</td></tr>' +
+    '<tr><td>Term (days)</td><td>' + inp('sopLtTerm', t, 'number', '70px') + '</td></tr>' +
+    '<tr><td><b>Due date</b></td><td><b id="sopLtDue" style="display:inline-block;background:#ffef5c;padding:2px 6px;border-radius:3px">—</b></td></tr>' +
+    '<tr><td colspan="2" style="padding-top:6px;color:#667">Check a date (e.g. delivery date):</td></tr>' +
+    [1, 2, 3].map(function(i){ return '<tr><td>' + inp('sopLtD' + i, '', 'date', '100%') + '</td><td id="sopLtR' + i + '" style="padding-left:6px"></td></tr>'; }).join('') +
+    '</table><small style="color:#667">Result = Due date − date. Negative = days late.</small></div>';
+}
+function sopLateCalc(){
+  var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
+  var due = poAddDays(g('sopLtRec'), g('sopLtTerm'));
+  var box = document.getElementById('sopLtDue'); if (!box) return;
+  box.textContent = due ? toMDY(due) : '—';
+  [1, 2, 3].forEach(function(i){
+    var c = document.getElementById('sopLtR' + i), v = g('sopLtD' + i); if (!c) return;
+    if (!due || !v){ c.innerHTML = ''; return; }
+    var n = Math.round((new Date(due + 'T00:00:00') - new Date(v + 'T00:00:00')) / 86400000);
+    c.innerHTML = '<b style="display:inline-block;min-width:44px;text-align:right;background:#ffef5c;padding:2px 6px;border-radius:3px;color:' + (n < 0 ? '#c0392b' : '#1e7e34') + '">' + n + '</b> ' +
+      '<span style="font-size:.75rem;color:' + (n < 0 ? '#c0392b' : '#1e7e34') + '">' + (n < 0 ? 'late' : 'on time') + '</span>';
+  });
+}
 function sopPenRecalc(quiet){
   var E = SOP_ED; sopReadForm();
   if (E.head.waive_date && !confirm('A waive letter is on file for this PO (no penalties). Compute penalties anyway?')){ E.pen = []; sopPenRender(); sopSumRender(); return; }
@@ -7491,13 +7518,14 @@ function sopRenderEditor(){
       '<button class="sx-btn gray" onclick="sopSwitch(SOP_TAB)">← Back to list</button></div>' +
     (E.sop ? '' : '<p class="sx-hint">Saving tags the PO stage as <b>SOP</b>.</p>') +
     '<div class="sp-help"><b>How to use</b><br><span class="sp-y">yellow boxes</span> = type here.<br>Everything else is computed from the PO and the deliveries.<br>Pick the <b>tax type</b> of each item on the right of the items.</div>' +
+    sopLateBox(h) +
     (sopDocsOf(h.po_number).length ? '<div class="sp-help">Documents: ' + sopDocChips(h.po_number) + '</div>' : '') + '</div>';
   document.getElementById('sopBody').innerHTML = notes.join('') +
     '<div class="sp-wrap"><div class="sp-paper">' + paper + '</div><div class="sp-side">' + side + '</div></div>' +
     '<div class="sx-card" id="sopGridCard"><div class="sx-h">📦 Delivery check <span class="sx-sub">qty received per delivery (DR) · red = late / undelivered</span></div><div id="sopGrid"></div></div>' +
     '<div id="sopPrev"></div>';
   document.getElementById('sopGrid').innerHTML = sopDeliveryGrid();
-  sopPenRender(); sopSumRender();
+  sopPenRender(); sopSumRender(); sopLateCalc();
 }
 function sopPenRender(){
   var E = SOP_ED, ro = !CAN_EDIT, M = sopMoney, html = '';
