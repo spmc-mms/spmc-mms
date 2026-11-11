@@ -7393,28 +7393,27 @@ function sopFormChanged(id){
 // checker = Due Date − date  (negative = days late, like the Excel =M54-M56)
 function sopLateBox(h){
   var d = h.supplier_received_date || '', t = h.terms_days == null ? '' : String(h.terms_days);
-  var inp = function(id, v, type, w){ return '<input id="' + id + '" type="' + type + '" value="' + esc(v) + '" oninput="sopLateCalc()" onchange="sopLateCalc()" style="width:' + w + ';background:#fff8d6;border:1px solid #e6d27a;border-radius:4px;padding:2px 4px;font-size:.8rem"/>'; };
+  var lab = function(x){ return '<div style="font-size:.78rem;color:#445;margin:8px 0 2px">' + x + '</div>'; };
+  var inp = function(id, v, type){ return '<input id="' + id + '" type="' + type + '" value="' + esc(v) + '" oninput="sopLateCalc()" onchange="sopLateCalc()" style="width:100%;box-sizing:border-box;background:#fff8d6;border:1px solid #e6d27a;border-radius:4px;padding:5px 6px;font-size:.9rem"/>'; };
+  var out = function(id){ return '<div id="' + id + '" style="background:#ffef5c;border-radius:4px;padding:5px 8px;font-size:.95rem;font-weight:bold;min-height:1.2em">—</div>'; };
   return '<div class="sp-help sp-late"><b>📅 Calendar days late computation</b>' +
-    '<table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:.8rem">' +
-    '<tr><td style="width:44%">PO received by supplier</td><td>' + inp('sopLtRec', d, 'date', '100%') + '</td></tr>' +
-    '<tr><td>Term (days)</td><td>' + inp('sopLtTerm', t, 'number', '70px') + '</td></tr>' +
-    '<tr><td><b>Due date</b></td><td><b id="sopLtDue" style="display:inline-block;background:#ffef5c;padding:2px 6px;border-radius:3px">—</b></td></tr>' +
-    '<tr><td colspan="2" style="padding-top:6px;color:#667">Check a date (e.g. delivery date):</td></tr>' +
-    [1, 2, 3].map(function(i){ return '<tr><td>' + inp('sopLtD' + i, '', 'date', '100%') + '</td><td id="sopLtR' + i + '" style="padding-left:6px"></td></tr>'; }).join('') +
-    '</table><small style="color:#667">Result = Due date − date. Negative = days late.</small></div>';
+    lab('PO received by supplier') + inp('sopLtRec', d, 'date') +
+    lab('Term (days)') + inp('sopLtTerm', t, 'number') +
+    lab('Due date') + out('sopLtDue') +
+    lab('Check a date (e.g. delivery date)') + inp('sopLtD1', '', 'date') +
+    lab('Result') + out('sopLtR1') +
+    '<small style="color:#667;display:block;margin-top:4px">Result = Due date − date. Negative = days late.</small></div>';
 }
 function sopLateCalc(){
   var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
   var due = poAddDays(g('sopLtRec'), g('sopLtTerm'));
-  var box = document.getElementById('sopLtDue'); if (!box) return;
+  var box = document.getElementById('sopLtDue'), c = document.getElementById('sopLtR1'); if (!box || !c) return;
   box.textContent = due ? toMDY(due) : '—';
-  [1, 2, 3].forEach(function(i){
-    var c = document.getElementById('sopLtR' + i), v = g('sopLtD' + i); if (!c) return;
-    if (!due || !v){ c.innerHTML = ''; return; }
-    var n = Math.round((new Date(due + 'T00:00:00') - new Date(v + 'T00:00:00')) / 86400000);
-    c.innerHTML = '<b style="display:inline-block;min-width:44px;text-align:right;background:#ffef5c;padding:2px 6px;border-radius:3px;color:' + (n < 0 ? '#c0392b' : '#1e7e34') + '">' + n + '</b> ' +
-      '<span style="font-size:.75rem;color:' + (n < 0 ? '#c0392b' : '#1e7e34') + '">' + (n < 0 ? 'late' : 'on time') + '</span>';
-  });
+  var v = g('sopLtD1');
+  if (!due || !v){ c.textContent = '—'; c.style.color = ''; return; }
+  var n = Math.round((new Date(due + 'T00:00:00') - new Date(v + 'T00:00:00')) / 86400000);
+  c.style.color = n < 0 ? '#c0392b' : '#1e7e34';
+  c.textContent = n + (n < 0 ? '   (' + (-n) + ' day(s) late)' : '   (on time)');
 }
 function sopPenRecalc(quiet){
   var E = SOP_ED; sopReadForm();
