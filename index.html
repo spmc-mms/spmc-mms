@@ -381,6 +381,7 @@ tr.row-unclaimed{background:#fffaf0}
 .pt-table th{text-align:left;background:#eef3f8;color:#33403a;padding:8px;border-bottom:2px solid #d7dde1;white-space:nowrap}
 .pt-table td{padding:7px 8px;border-bottom:1px solid #e8ecee;vertical-align:middle;white-space:nowrap}
 .pt-table tr:hover td{background:#f8fafb}
+.pt-table.pt-fit th{white-space:normal;vertical-align:bottom}.pt-table.pt-fit td.pt-wrap{min-width:0;max-width:none}
 .pt-table td.pt-wrap{white-space:normal;word-break:break-word;min-width:180px;max-width:320px}
 .pt-empty{text-align:center;color:#98a2ab;padding:26px 0;font-size:.85rem}
 .pt-badge{display:inline-block;font-size:.66rem;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;border:none}
@@ -4900,27 +4901,31 @@ function ptRenderSummary(){
   document.getElementById('ptMeta').textContent = 'Showing ' + shown.length + ' of ' + rows.length + ' PO(s)' + (rows.length !== all ? ' (filtered from ' + all + ')' : '') +
     (rows.length > MAX_ROWS ? ' — type in the search box to narrow it down' : '');
   if (!shown.length){ document.getElementById('ptSumArea').innerHTML = '<div class="pt-empty">No matching POs.</div>'; return; }
-  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th style="white-space:nowrap">MMS Receive Date</th><th>PO No.</th><th style="white-space:nowrap">Due Date</th><th>NOA # / PR #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
-    '<th>Delivery Status</th><th>Lacking / Remarks</th><th>PO Status</th></tr></thead><tbody>';
+  // one page wide (no left/right scroll): PO No. carries NOA / PR # and Due Date; Supplier carries the Unit
+  var h = '<table class="pt-table pt-fit" style="width:100%;table-layout:fixed"><colgroup><col style="width:8%"><col style="width:12%"><col style="width:17%"><col style="width:22%">' +
+    '<col style="width:9%"><col style="width:8%"><col style="width:13%"><col style="width:11%"></colgroup>' +
+    '<thead><tr><th>MMS Receive Date</th><th>PO No. / Due Date</th><th>Supplier / Unit</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
+    '<th>Delivery</th><th>Lacking / Remarks</th><th>PO Status</th></tr></thead><tbody>';
+  var wrapTd = ' style="white-space:normal;word-break:break-word"';
   shown.forEach(function(p){
     var a = p.rec || {}, n = p.lines.length;
     var items = n ? '<b>' + n + ' item' + (n === 1 ? '' : 's') + '</b>' + (a.category ? ' · ' + esc(a.category) : '') +
-        '<div class="pt-note" style="margin:0;white-space:normal">' + esc(p.lines.slice(0, 2).map(function(l){ return l.description; }).join('; ').slice(0, 110)) + (n > 2 ? ' …' : '') + '</div>'
+        '<div class="pt-note" style="margin:0;white-space:normal">' + esc(p.lines.slice(0, 2).map(function(l){ return l.description; }).join('; ').slice(0, 90)) + (n > 2 ? ' …' : '') + '</div>'
       : esc(a.category || '');
     var amt = a.gross != null && a.gross !== '' ? a.gross : a.amount != null && a.amount !== '' ? a.amount : (n ? p.lineAmt : null);   // no SOP yet → the PO amount
     var lr = [a.lacking ? '<span class="mn-lack">' + esc(lkShort(a.lacking)) + '</span>' : '', esc(String(a.remarks || '').slice(0, 90))].filter(Boolean).join('<br>');
-    var dt = ptDatesOf(p.po_number);
-    h += '<tr><td style="white-space:nowrap">' + (dt.mms ? esc(toMDY(dt.mms)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
-      '<td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
-      '<td style="white-space:nowrap">' + (dt.due ? esc(toMDY(dt.due)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
-      '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR# ' : '') + esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
-      '<td><span class="pt-cat">' + esc(p.category || '') + '</span></td><td>' + esc(p.supplier || '') + '</td>' +
-      '<td class="pt-wrap">' + items + '</td><td style="text-align:right;white-space:nowrap">' + (amt != null && amt !== '' ? M(amt, false) : '—') + '</td>' +
-      '<td>' + (n ? ptDst(p.overall) : '—') + '</td><td class="pt-wrap" style="font-size:.74rem;max-width:260px">' + (lr || '—') + '</td>' +
-      '<td style="white-space:nowrap">' + ptBadge(p.status || 'RACK', ' onclick="ptOpenPo(\'' + esc(p.key).replace(/'/g, "\\'") + '\')" title="Click to view / update this PO"') +
+    var dt = ptDatesOf(p.po_number), noa = ptNoaOf(p.po_number);
+    h += '<tr><td' + wrapTd + '>' + (dt.mms ? esc(toMDY(dt.mms)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
+      '<td' + wrapTd + '><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? ' <span class="pt-note" style="margin:0">old app</span>' : '') +
+        '<div class="pt-note" style="margin:2px 0 0">Due: ' + (dt.due ? '<b style="color:#1a3a5c">' + esc(toMDY(dt.due)) + '</b>' : '—') + '</div>' +
+        (noa ? '<div class="pt-note" style="margin:0">' + (p.category === 'CATERING' ? 'PR# ' : 'NOA# ') + esc(noa) + '</div>' : '') + '</td>' +
+      '<td' + wrapTd + '>' + esc(p.supplier || '') + '<div style="margin-top:2px"><span class="pt-cat">' + esc(p.category || '') + '</span></div></td>' +
+      '<td class="pt-wrap"' + wrapTd + '>' + items + '</td><td style="text-align:right;white-space:nowrap">' + (amt != null && amt !== '' ? M(amt, false) : '—') + '</td>' +
+      '<td' + wrapTd + '>' + (n ? ptDst(p.overall) : '—') + '</td><td class="pt-wrap"' + wrapTd.replace('"', '"font-size:.74rem;') + '>' + (lr || '—') + '</td>' +
+      '<td' + wrapTd + '>' + ptBadge(p.status || 'RACK', ' onclick="ptOpenPo(\'' + esc(p.key).replace(/'/g, "\\'") + '\')" title="Click to view / update this PO"') +
         (p.other && p.other !== p.status ? '<div class="pt-note" style="margin:3px 0 0">also: ' + esc(p.other) + '</div>' : '') + '</td></tr>';
   });
-  document.getElementById('ptSumArea').innerHTML = h + '</tbody></table></div>';
+  document.getElementById('ptSumArea').innerHTML = h + '</tbody></table>';
 }
 // the PO window: status + timeline + lacking (✎ Update form) and the PO's item lines
 function ptOpenPo(key){
