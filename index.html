@@ -5997,6 +5997,18 @@ function apPoSave(){
       var r = await sb.rpc('apv_recode_po_line', { p_line_id: l.po_line_id, p_code: v });
       if (r.error){ apMsg('err', esc((l.po_description || l.item_code) + ': ' + errText(r.error))); return; }
     }
+    // pieces of a LOT breakdown changed in this form (description / unit cost / S/N) are saved too
+    var pcs = []; Object.keys(c.partsByLine || {}).forEach(function(k){ c.partsByLine[k].forEach(function(b){ pcs = pcs.concat(b.pp); }); });
+    for (var j = 0; j < pcs.length; j++){
+      var pc = pcs[j], eD = document.getElementById('apPtD' + pc.part_id), eU = document.getElementById('apPtU' + pc.part_id), eS = document.getElementById('apPtS' + pc.part_id);
+      if (!eD && !eU) continue;
+      var rcd = await apPartRecode_(pc.part_id, pc.item_code); if (!rcd.ok) return;
+      var chg = (eD && eD.value.trim().toUpperCase() !== String(pc.description || '').toUpperCase()) ||
+                (eU && Number(eU.value) !== Number(pc.unit_cost || 0)) || (eS && eS.value.trim().toUpperCase() !== String(pc.serial_no || '').toUpperCase());
+      if (!chg) continue;
+      var rp = await sb.rpc('apv_part_save', { p_part_id: pc.part_id, p_unit_cost: eU && eU.value !== '' ? Number(eU.value) : null, p_serial: eS ? eS.value : null, p_description: eD ? eD.value : null });
+      if (rp.error){ apMsg('err', '❌ Breakdown ' + esc(pc.item_code) + ': ' + esc(errText(rp.error)) + (/apv_part_save|p_description/.test(errText(rp.error)) ? ' — has update 84 been run?' : '')); return; }
+    }
     return apRpc('apv_po_save', { p: p }, function(d){ return 'PO ' + esc(d.po_number) + ' saved (' + d.changes + ' item change(s)' + (codeChanges.length ? ', ' + codeChanges.length + ' code(s) changed' : '') + ').'; },
       function(d){ RC_PO_MAP = {}; return apPoOpen(d.po_number); });
   })();
@@ -6063,7 +6075,8 @@ function apRcvPartsHtml_(l, pp){
   var P = function(v){ return '₱' + (Number(v) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var can = ME.role === 'Approver', tot = 0, eq = (AP_CUR.h.category || '') === 'EQUIPMENT';
   var rows = pp.map(function(p){ var t = (Number(p.qty) || 0) * (Number(p.unit_cost) || 0); tot += t;
-    return '<tr><td><b>' + esc(String(p.item_code || '').indexOf('AUTO-') === 0 ? '—' : p.item_code) + '</b></td><td>' +
+    var pc = String(p.item_code || ''), auto = pc.indexOf('AUTO-') === 0 || pc.indexOf('TMP-') === 0;
+    return '<tr><td>' + (can ? '<input type="text" list="apPtDl" id="apPtC' + p.part_id + '" value="' + esc(auto ? '' : pc) + '" placeholder="' + (auto ? 'no code' : '') + '" title="Item code of this piece — its batch and stock card move to the new code" style="width:120px;font-weight:700"/>' : '<b>' + esc(auto ? '—' : pc) + '</b>') + '</td><td>' +
       (can ? '<input type="text" id="apPtD' + p.part_id + '" value="' + esc(p.description || '') + '" title="Description of this piece on this IAR (the item master list is not changed). Blank = the item\'s own description." style="width:100%;min-width:260px"/>' : esc(p.description || '')) +
       '</td><td>' + esc(p.unit || '') + '</td>' +
       '<td class="r">' + p.qty + '</td>' +
@@ -6072,17 +6085,36 @@ function apRcvPartsHtml_(l, pp){
       (eq || p.serial_no ? '<td>' + (can ? '<input type="text" id="apPtS' + p.part_id + '" value="' + esc(p.serial_no || '') + '" placeholder="S/N" style="width:130px"/>' : esc(p.serial_no || '')) + '</td>' : '<td></td>') +
       '<td>' + (can ? '<button class="ap-btn sm gray" onclick="apPartSave(' + p.part_id + ')">💾</button>' : '') + '</td></tr>'; }).join('');
   var lot = (Number(l.qty_received) || 0) * (Number(l.unit_cost) || 0), diff = Math.round((tot - lot) * 100) / 100, ok = Math.abs(diff) < 0.005;
-  return '<div style="font-weight:700;font-size:.82rem;margin-bottom:4px">🧩 Breakdown (particulars)</div>' +
+  var dl = (can && !document.getElementById('apPtDl') && typeof AP_LISTS !== 'undefined' && AP_LISTS.items)
+    ? '<datalist id="apPtDl">' + AP_LISTS.items.filter(function(i){ return i.item_code.indexOf('AUTO-') !== 0 && i.item_code.indexOf('TMP-') !== 0; })
+        .map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description || '') + '</option>'; }).join('') + '</datalist>' : '';
+  return dl + '<div style="font-weight:700;font-size:.82rem;margin-bottom:4px">🧩 Breakdown (particulars)</div>' +
     '<table class="ap-tbl" style="font-size:.8rem;background:#fff"><thead><tr><th>Code</th><th>Description</th><th>Unit</th><th class="r">Qty</th><th class="r">Unit Cost</th><th class="r">Total</th><th>' + (eq ? 'Serial No.' : '') + '</th><th></th></tr></thead><tbody>' + rows +
     '<tr style="font-weight:700"><td colspan="5" class="r">Total of the breakdown</td><td class="r">' + P(tot) + '</td><td colspan="2" style="color:' + (ok ? '#1e8449' : '#b9770e') + '">' +
       (ok ? '✅ matches the LOT (' + P(lot) + ')' : '⚠ LOT is ' + P(lot) + ' — difference ' + (diff > 0 ? '+' : '−') + P(Math.abs(diff))) + '</td></tr></tbody></table>';
 }
+// a piece's new item code (update 85) — '' = no change; asks before adding a code that is not in the item list
+async function apPartRecode_(id, oldCode){
+  var el = document.getElementById('apPtC' + id); if (!el) return { ok: true, changed: false };
+  var v = el.value.split(' — ')[0].trim().toUpperCase(), o = String(oldCode || '').toUpperCase();
+  if (!v || v === o) return { ok: true, changed: false };
+  var known = (typeof AP_LISTS !== 'undefined' && AP_LISTS.items || []).some(function(i){ return i.item_code.toUpperCase() === v; });
+  if (!confirm('Change the code of this piece' + (o && o.indexOf('AUTO-') !== 0 ? ' from ' + o : '') + ' to ' + v + '?\n\nIts batch and stock card move to ' + v + '.' +
+      (known ? '' : '\n\n' + v + ' is not in the item list yet — it will be ADDED (same unit, with this piece\'s description).'))) return { ok: false };
+  var r = await sb.rpc('apv_part_recode', { p_part_id: id, p_code: v });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_part_recode/.test(errText(r.error)) ? ' — has update 85 been run?' : '')); return { ok: false }; }
+  if (r.data.added && AP_LISTS && AP_LISTS.items) AP_LISTS.items.push({ item_code: v, description: '' });
+  return { ok: true, changed: !!r.data.changed };
+}
 async function apPartSave(id){
   var u = apVal('apPtU' + id), sn = document.getElementById('apPtS' + id) ? apVal('apPtS' + id) : null;
   var ds = document.getElementById('apPtD' + id) ? apVal('apPtD' + id) : null;
+  var cur = null; Object.keys(AP_CUR.partsByLine || {}).forEach(function(k){ AP_CUR.partsByLine[k].forEach(function(b){ b.pp.forEach(function(x){ if (x.part_id === id) cur = x; }); }); });
+  (AP_CUR.parts ? Object.keys(AP_CUR.parts) : []).forEach(function(k){ (AP_CUR.parts[k] || []).forEach(function(x){ if (x.part_id === id) cur = x; }); });
+  var rc = await apPartRecode_(id, cur ? cur.item_code : ''); if (!rc.ok) return;
   var r = await sb.rpc('apv_part_save', { p_part_id: id, p_unit_cost: u === '' ? null : Number(u), p_serial: sn, p_description: ds });
   if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_part_save|p_description/.test(errText(r.error)) ? ' — has update 84 been run?' : '')); return; }
-  var msg = r.data.changed ? '✅ Piece saved — in the Edit Log.' : 'No change.';
+  var msg = (r.data.changed || rc.changed) ? '✅ Piece saved' + (rc.changed ? ' (new code — its stock card moved too)' : '') + ' — in the Edit Log.' : 'No change.';
   if (AP_CUR.kind === 'po') await apPoOpen(AP_CUR.h.po_number); else await apRcvOpen(AP_CUR.h.receive_id);
   apMsg('ok', msg);
 }
