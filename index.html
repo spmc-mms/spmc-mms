@@ -942,6 +942,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
           <select id="poEuName" onchange="poOptPicked(this,'END_USER_NAME')"><option value="">-- Select End-User --</option></select></div>
         <div class="po-field"><label>PO Number <span class="req">*</span></label><input type="text" id="poNumber" placeholder="e.g. PO-2026-001"/></div>
         <div class="po-field"><label>PO Date <span class="req">*</span></label><input type="date" id="poDate"/></div>
+        <div class="po-field"><label>MMS Receive Date <span class="req">*</span></label><input type="date" id="poMmsRcv" title="The day the PO was received by MMS (not the day it is encoded)"/></div>
         <div class="po-field"><label>Supplier <span class="req">*</span></label>
           <div class="sc"><input class="sc-in" id="poSup_in" type="text" placeholder="Type to search supplier…" autocomplete="off"/><ul class="sc-drop" id="poSup_ul"></ul></div></div>
         <div class="po-field"><label>Date PO Received by Supplier <span class="req">*</span></label><input type="date" id="poSrd" onchange="poDueCalc()" oninput="poDueCalc()"/></div>
@@ -4032,6 +4033,7 @@ async function poSubmit(){
   if (!v('poNumber')){ poMsg('PO Number is required.', 'err'); return; }
   if (/["\r\n,]/.test(v('poNumber')) || !/\d/.test(v('poNumber')) || v('poNumber').length > 40){ poMsg('The PO Number looks wrong — it must be only the PO number, e.g. 2026-10-1234 (no description, quotes or commas).', 'err'); return; }
   if (!v('poDate')){ poMsg('PO Date is required.', 'err'); return; }
+  if (!v('poMmsRcv')){ poMsg('MMS Receive Date is required — the day MMS received the PO.', 'err'); return; }
   if (PO_SUPS.indexOf(sup) === -1){ poMsg('Please pick the Supplier from the list.', 'err'); return; }
   if (!v('poSrd')){ poMsg('Date PO Received by Supplier is required.', 'err'); return; }
   if (!v('poTerms') || v('poTerms') === '__new'){ poMsg('Please select the Terms.', 'err'); return; }
@@ -4052,6 +4054,8 @@ async function poSubmit(){
   }});
   btn.disabled = false; btn.textContent = '✅ Submit PO';
   if (res.error){ poMsg(errText(res.error), 'err'); return; }
+  var mmsNote = '';   // update 88: the day MMS received the PO
+  try { var mr8 = await sb.rpc('set_po_mms_received', { p_po: res.data.po_number, p_date: v('poMmsRcv') }); if (mr8.error) mmsNote = ' ⚠ MMS Receive Date not saved: ' + errText(mr8.error) + ' — set it in Approvals → PO.'; } catch(e8){ mmsNote = ' ⚠ MMS Receive Date not saved — set it in Approvals → PO.'; }
   if (v('poTin')) sb.rpc('supplier_add_details', { p: { supplier: sup, tin: v('poTin') } }).then(function(){}, function(){});   // update 77: the supplier keeps its TIN
   // MIXED PO: the items received by another unit
   var mixNote = '';
@@ -4063,10 +4067,11 @@ async function poSubmit(){
       mixNote = mr.error ? ' ⚠ Received-by units not saved: ' + errText(mr.error) + ' — set them in Approvals → PO.' : ' Mixed PO: ' + mr.data.changed + ' item(s) are received by another unit.';
     } catch(eM){ mixNote = ' ⚠ Received-by units not saved — set them in Approvals → PO.'; }
   }
+  mixNote += mmsNote;
   poMsg('PO ' + res.data.po_number + ' (' + res.data.category + ' · ' + (res.data.txn_type || 'REGULAR STOCK') + ') saved — ' + res.data.items + ' item(s).' + (res.data.due_date ? ' Due date: ' + toMDY(res.data.due_date) + '.' : '') + mixNote, mixNote.indexOf('⚠') !== -1 ? 'err' : 'ok');
   document.getElementById('poTxn').value = 'REGULAR STOCK'; poTxnChange();
   PO_CART = []; poRenderCart();
-  ['poNumber','poNoa','poTin','poObrNo','poObrDate','poSup_in','poEU_in','poEuName','poProj','poGrp','poFund','poMode','poSrd','poTerms','poClass'].forEach(function(id){ document.getElementById(id).value = ''; });
+  ['poNumber','poMmsRcv','poNoa','poTin','poObrNo','poObrDate','poSup_in','poEU_in','poEuName','poProj','poGrp','poFund','poMode','poSrd','poTerms','poClass'].forEach(function(id){ document.getElementById(id).value = ''; });
   document.getElementById('poClass').dataset.auto = ''; poDueCalc();
   if (!u1()) document.getElementById('poCategory').value = '';
   // refresh the item list so newly created AUTO- items show as suggestions next time
@@ -4704,6 +4709,9 @@ async function ptLoad(quiet){
     ]);
     PT_ENTRIES = res[0]; PT_LINES = res[1];
     try { PT_NOA = {}; (await fetchAll(function(){ return sb.from('po_headers').select('po_number,noa_number').order('po_number'); })).forEach(function(h){ if (h.noa_number) PT_NOA[ptKey(h.po_number)] = String(h.noa_number).trim(); }); } catch(eN){}
+    // MMS Receive Date + Due Date of each PO (update 88)
+    try { PT_DATES = {}; (await fetchAll(function(){ return sb.from('po_headers').select('po_number,mms_received_date,due_date').order('po_number'); })).forEach(function(h){ PT_DATES[ptKey(h.po_number)] = { mms: h.mms_received_date, due: h.due_date }; }); }
+    catch(eD){ try { (await fetchAll(function(){ return sb.from('po_headers').select('po_number,due_date').order('po_number'); })).forEach(function(h){ PT_DATES[ptKey(h.po_number)] = { mms: null, due: h.due_date }; }); } catch(eD2){} }
     if (PT_TABS.some(function(t){ return t.key === 'summary'; })) await ptAsLoad();
     try { PT_DOCS = await fetchAll(function(){ return sb.from('v_po_documents').select('id,doc_type,date_received,po_number,matched_po,new_deadline,note').not('matched_po', 'is', null).order('date_received').order('id'); }); } catch(e2){ PT_DOCS = []; }
     ptChecksLoad();
@@ -4760,7 +4768,8 @@ function ptStamp(e){
     .map(function(v){ return v ? String(v) : ''; }).sort().pop() || '';
 }
 // NOA # per PO (from the PO header) + the NOA filter
-var PT_NOA = {}, PT_NOA_Q = '', PT_NOA_MODE = '';
+var PT_NOA = {}, PT_NOA_Q = '', PT_NOA_MODE = '', PT_DATES = {};
+function ptDatesOf(po){ return PT_DATES[ptKey(po)] || {}; }
 function ptNoaOf(po){ return PT_NOA[ptKey(po)] || ''; }
 function ptNoaOk(po){
   var n = ptNoaOf(po);
@@ -4891,7 +4900,7 @@ function ptRenderSummary(){
   document.getElementById('ptMeta').textContent = 'Showing ' + shown.length + ' of ' + rows.length + ' PO(s)' + (rows.length !== all ? ' (filtered from ' + all + ')' : '') +
     (rows.length > MAX_ROWS ? ' — type in the search box to narrow it down' : '');
   if (!shown.length){ document.getElementById('ptSumArea').innerHTML = '<div class="pt-empty">No matching POs.</div>'; return; }
-  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th>PO No.</th><th>NOA # / PR #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
+  var h = '<div class="pt-scroll"><table class="pt-table"><thead><tr><th style="white-space:nowrap">MMS Receive Date</th><th>PO No.</th><th style="white-space:nowrap">Due Date</th><th>NOA # / PR #</th><th>Unit</th><th>Supplier</th><th>Items / Category</th><th style="text-align:right">Amount</th>' +
     '<th>Delivery Status</th><th>Lacking / Remarks</th><th>PO Status</th></tr></thead><tbody>';
   shown.forEach(function(p){
     var a = p.rec || {}, n = p.lines.length;
@@ -4900,7 +4909,10 @@ function ptRenderSummary(){
       : esc(a.category || '');
     var amt = a.gross != null && a.gross !== '' ? a.gross : a.amount != null && a.amount !== '' ? a.amount : (n ? p.lineAmt : null);   // no SOP yet → the PO amount
     var lr = [a.lacking ? '<span class="mn-lack">' + esc(lkShort(a.lacking)) + '</span>' : '', esc(String(a.remarks || '').slice(0, 90))].filter(Boolean).join('<br>');
-    h += '<tr><td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
+    var dt = ptDatesOf(p.po_number);
+    h += '<tr><td style="white-space:nowrap">' + (dt.mms ? esc(toMDY(dt.mms)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
+      '<td><b>' + esc(p.po_number) + '</b>' + (a.source === 'IMPORT' ? '<div class="pt-note" style="margin:0">old app</div>' : '') + '</td>' +
+      '<td style="white-space:nowrap">' + (dt.due ? esc(toMDY(dt.due)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
       '<td style="white-space:nowrap">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR# ' : '') + esc(ptNoaOf(p.po_number)) : '<span class="pt-note" style="margin:0">—</span>') + '</td>' +
       '<td><span class="pt-cat">' + esc(p.category || '') + '</span></td><td>' + esc(p.supplier || '') + '</td>' +
       '<td class="pt-wrap">' + items + '</td><td style="text-align:right;white-space:nowrap">' + (amt != null && amt !== '' ? M(amt, false) : '—') + '</td>' +
@@ -5827,6 +5839,7 @@ function apPoRender(){
     '<div class="ap-grid">' +
       apField('PO Number (rename)', 'apPoNo', h.po_number) + apField('Supplier', 'apPoSup', h.supplier, { list: 'apSupDl' }) +
       apField('PO Date', 'apPoDate', h.po_date, { type: 'date' }) +
+      apField('MMS Receive Date', 'apPoMms', h.mms_received_date, { type: 'date' }) +
       '<div class="ap-f"><label>Category (SOP)</label><select id="apPoClass" onchange="poOptPicked(this,\'ITEM_CLASS\')">' + poOptHtml('ITEM_CLASS', h.item_class || '', '—') + '</select></div>' +
       '<div class="ap-f"><label>Date PO Received by Supplier</label><input type="date" id="apPoSrd" value="' + esc(h.supplier_received_date || '') + '" onchange="apPoDueCalc()" oninput="apPoDueCalc()"/></div>' +
       '<div class="ap-f"><label>Terms</label><select id="apPoTerms" onchange="poOptPicked(this,\'TERMS\');apPoDueCalc()">' + poOptHtml('TERMS', h.terms_days == null ? '' : String(h.terms_days), '—') + '</select></div>' +
@@ -5992,6 +6005,13 @@ function apPoSave(){
     var v = el.value.split(' — ')[0].trim(); return v && v.toUpperCase() !== String(apNoCode_(l) ? '' : l.item_code).toUpperCase();
   });
   return (async function(){
+    // MMS Receive Date (update 88) — saved on the PO number before any rename
+    var mmsEl = document.getElementById('apPoMms');
+    if (mmsEl && (mmsEl.value || '') !== (c.h.mms_received_date || '')){
+      var rm = await sb.rpc('set_po_mms_received', { p_po: c.h.po_number, p_date: mmsEl.value || null });
+      if (rm.error){ apMsg('err', '❌ MMS Receive Date: ' + esc(errText(rm.error)) + (/set_po_mms_received/.test(errText(rm.error)) ? ' — has update 88 been run?' : '')); return; }
+      c.h.mms_received_date = mmsEl.value || null;
+    }
     for (var i = 0; i < codeChanges.length; i++){
       var l = codeChanges[i], v = document.getElementById('apPlA' + l.po_line_id).value.split(' — ')[0].trim();
       var r = await sb.rpc('apv_recode_po_line', { p_line_id: l.po_line_id, p_code: v });
