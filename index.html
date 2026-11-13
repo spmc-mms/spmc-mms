@@ -4941,8 +4941,8 @@ function ptOpenPo(key){
   box.innerHTML = '<div class="pt-mhead"><b>' + esc(p.po_number) + '</b> — ' + esc(p.supplier || '') + ' <span class="pt-cat">' + esc(p.category || '') + '</span>' +
       '<div class="pt-msub">' + (ptNoaOf(p.po_number) ? (p.category === 'CATERING' ? 'PR # ' : 'NOA # ') + esc(ptNoaOf(p.po_number)) + ' · ' : '') + esc((a && a.category) || '') + (a && a.source === 'IMPORT' ? ' · record from the old PO Monitoring app' : '') + '</div></div>' +
     '<div class="pt-mstatus">Current PO Status: ' + ptBadge(p.status || 'RACK') + (p.other && p.other !== p.status ? '<span class="pt-note">also ' + esc(p.other) + '</span>' : '') + '</div>' +
-    (a ? '<div id="monEdPt"></div>' : p.category === 'EQUIPMENT' && ptCanRoute()
-      ? '<div id="monEdPt"><p class="pt-note">📋 EQUIPMENT — you can already list the <b>lacking requirements</b> and remarks while this PO is still on going. ' +
+    (a ? '<div id="monEdPt"></div>' : (p.category === 'EQUIPMENT' || p.category === 'CATERING') && ptCanRoute()
+      ? '<div id="monEdPt"><p class="pt-note">📋 ' + esc(p.category) + ' — you can already list the <b>lacking requirements</b> and remarks while this PO is still on going. ' +
         '<button class="pt-btn pt-indigo" onclick="ptEqLacking(\'' + esc(key) + '\')">📋 Lacking requirements / remarks</button></p></div>'
       : '<p class="pt-note">No SOP record yet — the SOP status (For SOP, Pending, Processed …) starts once the PO is finalized FOR SOP or added in SOP Monitoring.</p>') +
     lines + '<div id="ptPoRem"></div>' + ptDocsOnFile(p.po_number) +
@@ -4960,7 +4960,7 @@ function ptOpenPo(key){
 function ptEqLacking(key){
   var p = ptPOs().filter(function(x){ return x.key === key; })[0]; if (!p) return;
   MON_CTX = 'pt';
-  monEdit(0, null, { po_number: p.po_number, supplier: p.supplier || '', unit: 'EQUIPMENT', amount: p.lineAmt != null ? Math.round(p.lineAmt * 100) / 100 : '', sop_status: 'ON GOING' });
+  monEdit(0, null, { po_number: p.po_number, supplier: p.supplier || '', unit: p.category || 'EQUIPMENT', amount: p.lineAmt != null ? Math.round(p.lineAmt * 100) / 100 : '', sop_status: 'ON GOING' });
 }
 function ptTable(rows, key){
   if (!rows.length) return '<div class="pt-empty">Nothing here right now.</div>';
@@ -7644,7 +7644,7 @@ var MON_ROWS = [], MON_ST = '', MON_EDIT = null, MON_UNIT = '', MON_MAX = 300;
 var MON_STATUS = [
   { s: 'FOR SOP', c: '#1f618d', b: '#eaf2f8', i: '📝' },
   { s: 'PENDING', c: '#b9770e', b: '#fef5e7', i: '⏸' },
-  { s: 'ON GOING', c: '#4b5563', b: '#eef0f3', i: '⏳' }    // EQUIPMENT: lacking requirements kept while the PO is still on going
+  { s: 'ON GOING', c: '#4b5563', b: '#eef0f3', i: '⏳' }    // EQUIPMENT and CATERING: lacking requirements kept while the PO is still on going
 ];
 var MON_CTX = 'sop';   // which page the ✎ Update form is on: 'sop' (SOP Monitoring) or 'pt' (PO Trail → After SOP)
 var MON_OTHER = [
