@@ -2893,7 +2893,7 @@ function rcRenderRows(){
       ? '<div class="asg-wrap"><input type="text" id="rcAsg' + k + '" list="rcItemList" placeholder="Type the Assigned Code…" value="' + (r.isCoded && !noCode ? esc(r.itemCode + ' — ' + r.desc) : '') + '"/>' +
           '<button type="button" class="btn btn-ok btn-sm" onclick="rcAssign(' + k + ')">✔ Assign</button>' +
           (r.isCoded ? '<button type="button" class="btn btn-out btn-sm" onclick="rcRow(' + k + ').editCode=false;rcRenderRows()">Cancel</button>' : '') + '</div>' +
-          (r.isCoded ? '' : '<div class="rc-sub" style="color:#b26a00">⚠ Not yet coded — assign the code before receiving</div>')
+          (r.isCoded ? '' : RC_INOUT ? '<div class="rc-sub" style="color:#667">IN & OUT (not stocked) — a code is optional</div>' : '<div class="rc-sub" style="color:#b26a00">⚠ Not yet coded — assign the code before receiving</div>')
       : r.locked
       ? '<input type="text" readonly class="code-hover" title="' + esc((noCode ? 'No code' : r.itemCode) + ' — ' + r.desc + (r.unit ? ' (' + r.unit + ')' : '')) + '" value="' + esc(noCode ? r.desc + '  (no code)' : r.itemCode + ' — ' + r.desc) + '"/>' +
           (r.endUser ? '<div class="rc-sub">for ' + esc(r.endUser) + '</div>' : '') +
@@ -3161,7 +3161,7 @@ function rcSave(){
     var freeRow = !r.locked && !rcCoded();
     if (!(r.qty > 0) || !(r.itemCode || (freeRow && r.desc))) continue;
     if (freeRow && !String(r.unit || '').trim()){ rcAlert('error', 'Enter the Unit for ' + esc(r.desc) + '.'); return; }
-    if (r.locked && r.isCoded === false){ rcAlert('error', 'Assign the code for “' + esc(r.poDesc || r.desc) + '” before receiving it.'); return; }
+    if (r.locked && r.isCoded === false && !RC_INOUT){ rcAlert('error', 'Assign the code for “' + esc(r.poDesc || r.desc) + '” before receiving it.'); return; }
     var rParts = r.parts && r.parts.length ? r.parts : null;
     if (!rParts && !RC_CATERING && !r.noExp && !r.exp){ rcAlert('error', 'Enter the Expiry Date for ' + esc(r.itemCode || r.desc) + ', or tick “No exp.”'); return; }
     if (r.locked && !r.free){
