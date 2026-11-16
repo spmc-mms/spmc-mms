@@ -2445,7 +2445,7 @@ var RC_CONV = null;        // { receiveId, supplier, lines:[...] }
 var RC_CONV_PO_KEYS = [];
 var RC_LAST_IAR = null;
 var RC_CATERING = false;
-var RC_INOUT = false;
+var RC_INOUT = false, RC_TXN = '';
 var RC_CAT = '';
 var RC_CODED_CATS = ['SUPPLIES UNIT','DRUGS AND MEDS','FLUIDS','GASES','NSCM'];
 function rcCoded(){ return RC_CODED_CATS.indexOf(RC_CAT) !== -1; }
@@ -2720,7 +2720,7 @@ function rcSelectPo(poNo){
       qty: 0, cost: rcNum(l.unit_cost), exp: '', noExp: false, cancel: false });
   });
   var pill = document.getElementById('rcPill');
-  RC_INOUT = isInOut(po.txnType);
+  RC_INOUT = isInOut(po.txnType); RC_TXN = po.txnType || '';
   RC_CATERING = RC_CAT === 'CATERING' || RC_INOUT;
   var mixed = Object.keys(po.units || {}).length > 1;
   pill.textContent = '📦 PO ' + poNo + ' [' + (po.category || '') + (mixed ? ' · MIXED — ' + RC_CAT + ' items only, own IAR' : '') + ' · ' + (po.txnType || 'REGULAR STOCK') + '] — ' + open.length + ' item line(s) with open balance' +
@@ -3070,7 +3070,7 @@ function rcFormIarData(){
     resp: document.getElementById('rcResp').value || (RC_CAT === 'CATERING' && allLines[0] && allLines[0].noa_number ? 'PR# ' + allLines[0].noa_number : ''),
     dateRec: document.getElementById('rcDate').value, loc: rcLocFromDisplay(document.getElementById('rcLoc_in').value),
     reqOff: document.getElementById('rcReqOff').value.trim() || sopUniq(RC_ROWS.filter(function(r){ return r.locked && r.qty > 0; }).map(function(r){ return r.endUser; })).join(', ') || ((RC_PO_MAP[RC_PO] || {}).endUser || ''),
-    items: groupIarItems(items), poComplete: complete, unit: RC_CAT };
+    items: groupIarItems(items), poComplete: complete, unit: RC_CAT, expense: !RC_IS_ADV && !!RC_PO && RC_TXN === 'EXPENSE' };   // EXPENSE POs (all units): Stock/Property No. = EXPENSE
 }
 
 function rcPreviewIar(){
@@ -3126,7 +3126,7 @@ async function rcIarFromLog(receiveId){
     if (!rows.length){ wait('Receipt ' + esc(receiveId) + ' was not found.', true); return; }
     var r0 = rows[0];
     var iar = await fetchAll(function(){ return sb.from('v_iar_lines').select('*').eq('receive_id', receiveId).order('receipt_line_id').order('part_id'); });
-    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name,end_user').eq('po_number', r0.po_number).maybeSingle();
+    var po = await sb.from('po_headers').select('po_date,overall_status,category,noa_number,project_name,end_user,txn_type').eq('po_number', r0.po_number).maybeSingle();
     // Requisitioning Office/Dept. = what was typed on the receipt, else the end user(s) of the PO items received
     var reqOff = String(r0.req_office || '').trim();
     if (!reqOff && r0.po_number){
@@ -3138,7 +3138,7 @@ async function rcIarFromLog(receiveId){
     rcShowIar({ iarNo: r0.iar_no || '', fund: r0.fund_cluster || '', poNo: r0.po_number, supplier: r0.supplier, pod: po.data ? po.data.po_date : '', invNo: r0.invoice_no, invDate: r0.invoice_date,
       project: po.data ? po.data.project_name || '' : '',
       resp: r0.resp_code || (po.data && po.data.category === 'CATERING' && po.data.noa_number ? 'PR# ' + po.data.noa_number : ''),
-      dateRec: r0.date, loc: r0.location, reqOff: reqOff, unit: r0.category || (po.data ? po.data.category : ''), poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
+      dateRec: r0.date, loc: r0.location, reqOff: reqOff, unit: r0.category || (po.data ? po.data.category : ''), expense: !!(po.data && po.data.txn_type === 'EXPENSE'), poComplete: !!(po.data && po.data.overall_status === 'COMPLETE'),
       items: groupIarItems(iar.map(function(x){ return { code: x.item_code, desc: x.description + (x.free_goods ? ' — FREE GOODS' : ''), unit: x.unit, qty: rcNum(x.qty), free: !!x.free_goods, lot: x.from_lot || '', sn: x.serial_no || '' }; })) });
   } catch(e){ wait('Could not load the IAR: ' + esc(errText(e)) + ' — close and click 🖨 IAR again.', true); }
 }
@@ -3587,7 +3587,7 @@ lastLot = it.lot || null;
 // a piece of a LOT: its assigned code + qty (the description only while it has no code yet)
 var sn = it.sns && it.sns.length ? '<tr><td></td><td style="padding-left:'+(it.lot ? 26 : 12)+'px;font-size:7.5pt">S/N: '+esc(it.sns.join(', '))+'</td><td></td><td></td></tr>' : '';
 if (sn) nLotRows++;
-return head + '<tr><td class="c">'+esc(offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+esc(it.desc)+'</td><td class="c">'+esc(it.unit)+'</td>'+
+return head + '<tr><td class="c">'+esc(o.expense && !it.lot ? 'EXPENSE' : offCode(it.code))+'</td><td'+(it.lot ? ' style="padding-left:14px"' : '')+'>'+esc(it.desc)+'</td><td class="c">'+esc(it.unit)+'</td>'+
 '<td class="c">'+it.qty+'</td></tr>' + sn;
 }).join('') + '<tr><td></td><td class="c" style="font-weight:bold">***NOTHING FOLLOWS***</td><td></td><td></td></tr>';
 rowsHtml = projRow + rowsHtml;
