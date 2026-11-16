@@ -1966,7 +1966,31 @@ async function previewRsmiClick(){
   var res = await sb.rpc('peek_rsmi_no', { p_unit: selUnit === '—' ? null : selUnit });
   if (res.error){ showMsg('err', 'Error: ' + errText(res.error)); return; }
   var found = {}; risList.forEach(function(g){ found[g.risNo] = true; });
-  openRsmiPreviewModal({ rsmiNo: res.data, date: TODAY_STR, risList: risList, docType: docTypeOf(selUnit),
+  // update 89: the fund of each issued qty (from the PO of its batch) → one RSMI per fund
+  var parts = null;
+  try {
+    var fr = await sb.rpc('rsmi_fund_preview', { p_ris_nos: risList.map(function(g){ return g.risNo; }) });
+    if (!fr.error && fr.data && fr.data.length){
+      var lineInfo = {};
+      ISS_LOG_DATA.forEach(function(r){ if (found[r.risNo]) lineInfo[r.lineId] = r; });
+      var byFund = {}, fOrder = [];
+      fr.data.forEach(function(x){
+        var r = lineInfo[x.ris_line_id]; if (!r) return;
+        if (!byFund[x.fund]){ byFund[x.fund] = { fund: x.fund, groups: {}, order: [] }; fOrder.push(x.fund); }
+        var F = byFund[x.fund];
+        if (!F.groups[r.risNo]){ F.groups[r.risNo] = { risNo: r.risNo, date: r.date, ward: r.endUser, remarks: r.remarks || '', items: [] }; F.order.push(r.risNo); }
+        F.groups[r.risNo].items.push({ itemCode: r.itemCode, itemDescription: r.itemDescription, unit: r.unit, qty: Number(x.qty) });
+      });
+      var ord = function(f){ return f === 'Regular Agency Fund (01)' ? 1 : f === 'Internal Generated Fund (5)' ? 2 : f === 'Trust Fund (07)' ? 3 : 9; };
+      fOrder.sort(function(a, b){ return ord(a) - ord(b) || a.localeCompare(b); });
+      parts = fOrder.map(function(f){
+        var F = byFund[f], list = F.order.map(function(k){ return F.groups[k]; });
+        list.sort(function(a,b){ return a.date === b.date ? a.risNo.localeCompare(b.risNo) : a.date.localeCompare(b.date); });
+        return { fund: f, risList: list };
+      });
+    }
+  } catch(eF){ parts = null; }
+  openRsmiPreviewModal({ rsmiNo: res.data, date: TODAY_STR, risList: risList, docType: docTypeOf(selUnit), parts: parts,
     skipped: risNos.filter(function(r){ return !found[r]; }) }, risList.map(function(g){ return g.risNo; }), 'create');
 }
 
@@ -1978,20 +2002,21 @@ async function saveRsmiClick(){
   var selDate = rsmiSelDate();
   if (rsmiDateOn() && !selDate){ showMsg('err', 'Pick the ' + (RSMI_PREVIEW.docType || 'RSMI') + ' Date (or untick "Select ' + (RSMI_PREVIEW.docType || 'RSMI') + ' Date").'); document.getElementById('rsmiDateIn').focus(); return; }
   btn.disabled = true; btn.textContent = 'Saving…';
-  var res = (manualNo || selDate)
-    ? await sb.rpc('save_rsmi_ex', { p_ris_nos: RSMI_PREVIEW.risNos, p_rsmi_no: manualNo || null, p_date: selDate || null })
-    : await sb.rpc('save_rsmi', { p_ris_nos: RSMI_PREVIEW.risNos });
+  var res = await sb.rpc('save_rsmi_funds', { p_ris_nos: RSMI_PREVIEW.risNos, p_rsmi_no: manualNo || null, p_date: selDate || null });   // update 89: one per fund
   if (res.error){
     btn.disabled = false; btn.textContent = '💾 Save ' + (RSMI_PREVIEW.docType || 'RSMI');
-    showMsg('err', errText(res.error));
+    showMsg('err', errText(res.error) + (/save_rsmi_funds/.test(errText(res.error)) ? ' — has update 89 been run?' : ''));
     return;
   }
   var d = res.data;
   closeRsmiPreviewModal();
   var box = document.getElementById('rsmiCreateMsg');
   box.className = 'msg ok';
-  box.innerHTML = esc(d.doc_type || 'RSMI') + ' <b>' + esc(d.rsmi_no) + '</b>' + (d.manual ? ' (manual No.)' : '') + (selDate ? ' dated ' + esc(selDate) : '') + ' saved — ' + d.ris_count + ' RIS. ' +
-    '<a href="#" onclick="viewRsmiClick(event,\'' + esc(d.rsmi_no).replace(/'/g,"\\'") + '\')">👁 View / Print →</a>';
+  var sets = d.rsmis && d.rsmis.length ? d.rsmis : [{ rsmi_no: d.rsmi_no, fund: '', ris_count: d.ris_count }];
+  box.innerHTML = (sets.length > 1 ? sets.length + ' ' + esc(d.doc_type || 'RSMI') + ' saved (one per fund)' + (selDate ? ' dated ' + esc(selDate) : '') + ':<br>' :
+      esc(d.doc_type || 'RSMI') + ' saved' + (d.manual ? ' (manual No.)' : '') + (selDate ? ' dated ' + esc(selDate) : '') + ': ') +
+    sets.map(function(x){ return '<b>' + esc(x.rsmi_no) + '</b>' + (x.fund ? ' · ' + esc(x.fund) : '') + ' — ' + (x.ris_count || 0) + ' RIS ' +
+      '<a href="#" onclick="viewRsmiClick(event,\'' + esc(x.rsmi_no).replace(/'/g,"\\'") + '\')">👁 View / Print →</a>'; }).join('<br>');
   box.style.display = 'block';
   RSMI_CHECKED = {};
   loadIssLog();
@@ -2009,7 +2034,7 @@ async function loadRsmiLog(){
       ? RSMI_LOG_DATA.map(function(r){
           var no = esc(r.rsmi_no), noJs = no.replace(/'/g,"\\'");
           return '<tr class="rsmi-row" data-rsmi="'+no+'" onclick="toggleRsmiDetail(\''+noJs+'\')" title="Click to show the items in this RSMI">'+
-            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(u1() ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b>'+(manualSet[r.rsmi_no] ? ' <span style="font-size:.68rem;background:#fff3d6;color:#8a5a00;border-radius:3px;padding:0 4px" title="The number was typed (manual)">MANUAL</span>' : '')+'</td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
+            '<td><span class="rsmi-caret" id="caret_'+no+'">▸</span> '+(u1() ? '' : '<span style="font-size:.72rem;background:#e8eef7;color:#1a3a6b;border-radius:3px;padding:0 4px">'+esc(r.doc_type||'RSMI')+'</span> ')+'<b>'+no+'</b>'+(manualSet[r.rsmi_no] ? ' <span style="font-size:.68rem;background:#fff3d6;color:#8a5a00;border-radius:3px;padding:0 4px" title="The number was typed (manual)">MANUAL</span>' : '')+(r.fund_cluster ? ' <span style="font-size:.68rem;background:#e6f4ea;color:#1e6b34;border-radius:3px;padding:0 4px" title="Fund Cluster">'+esc(String(r.fund_cluster).replace(/ Fund| Agency| Generated/g,''))+'</span>' : '')+'</td><td>'+esc(r.date)+'</td><td>'+esc(r.ward)+'</td>'+
             '<td>'+esc(r.ris_nos)+'</td><td>'+esc(r.line_count)+'</td><td>'+esc(r.total_qty)+'</td><td>'+esc(r.encoded_by)+'</td>'+
             '<td><a href="#" class="ris-link" onclick="event.stopPropagation();viewRsmiClick(event,\''+noJs+'\')">👁 View</a></td></tr>'+
             '<tr class="rsmi-detail" id="detail_'+no+'" style="display:none"><td colspan="8"><div class="rsmi-detail-box">Loading…</div></td></tr>';
@@ -2037,9 +2062,12 @@ async function toggleRsmiDetail(rsmiNo){
     var rows = RSMI_DETAIL_CACHE[rsmiNo];
     if (!rows){
       box.textContent = 'Loading…';
-      rows = (await fetchAll(function(){
-        return sb.from('v_ris_lines').select('*').eq('rsmi_no', rsmiNo).order('date').order('ris_no').order('id');
-      })).map(mapRisRow);
+      var rl = await fetchAll(function(){ return sb.from('v_rsmi_lines').select('ris_no,ris_line_id,qty_issued').eq('rsmi_no', rsmiNo); });
+      var qBy = {}; rl.forEach(function(x){ qBy[x.ris_line_id] = x.qty_issued; });
+      var rn = Array.from(new Set(rl.map(function(x){ return x.ris_no; })));
+      rows = !rn.length ? [] : (await fetchAll(function(){
+        return sb.from('v_ris_lines').select('*').in('ris_no', rn).order('date').order('ris_no').order('id');
+      })).filter(function(x){ return qBy[x.id] != null; }).map(function(x){ var m = mapRisRow(x); m.qtyIssued = qBy[x.id]; m.rsmiNo = rsmiNo; return m; });
       RSMI_DETAIL_CACHE[rsmiNo] = rows;
     }
     box.innerHTML = rows.length
@@ -2062,7 +2090,7 @@ async function viewRsmiClick(ev, rsmiNo){
   try {
     var rows = await fetchAll(function(){ return sb.from('v_rsmi_lines').select('*').eq('rsmi_no', rsmiNo).order('ris_no').order('ris_line_id'); });
     if (!rows.length){ showMsg('err', 'RSMI ' + rsmiNo + ' not found.'); return; }
-    var hd = await sb.from('rsmi').select('doc_type').eq('rsmi_no', rsmiNo).maybeSingle();
+    var hd = await sb.from('rsmi').select('*').eq('rsmi_no', rsmiNo).maybeSingle();
     var risNos = Array.from(new Set(rows.map(function(r){ return r.ris_no; })));
     var rem = await fetchAll(function(){ return sb.from('ris').select('ris_no,remarks').in('ris_no', risNos); });
     var remBy = {}; rem.forEach(function(x){ remBy[x.ris_no] = x.remarks || ''; });
@@ -2071,7 +2099,7 @@ async function viewRsmiClick(ev, rsmiNo){
       if (!groups[r.ris_no]){ groups[r.ris_no] = { risNo: r.ris_no, date: r.release_date, ward: r.ward, remarks: remBy[r.ris_no] || '', items: [] }; order.push(r.ris_no); }
       groups[r.ris_no].items.push({ itemCode: r.item_code, itemDescription: r.description, unit: r.unit, qty: Number(r.qty_issued) });
     });
-    openRsmiPreviewModal({ rsmiNo: rsmiNo, date: rows[0].rsmi_date, docType: (hd.data && hd.data.doc_type) || 'RSMI', risList: order.map(function(k){ return groups[k]; }) }, [], 'view');
+    openRsmiPreviewModal({ rsmiNo: rsmiNo, date: rows[0].rsmi_date, docType: (hd.data && hd.data.doc_type) || 'RSMI', fund: (hd.data && hd.data.fund_cluster) || '', risList: order.map(function(k){ return groups[k]; }) }, [], 'view');
   } catch(e){
     showMsg('err', 'Error: ' + errText(e));
   }
@@ -4299,7 +4327,7 @@ function renderRsmiTemplate(o){
     +     '<div class="rsmi-title">' + L.title + '</div>'
     +     '<div class="rsmi-metarow"><span>Entity Name: <span class="rsmi-fill">SOUTHERN PHILIPPINES MEDICAL CENTER</span></span>'
     +       '<span>Serial No.: <span class="rsmi-fill">' + esc(o.rsmiNo) + '</span></span></div>'
-    +     '<div class="rsmi-metarow"><span>Fund Cluster: <span class="rsmi-fill">&nbsp;</span></span>'
+    +     '<div class="rsmi-metarow"><span>Fund Cluster: <span class="rsmi-fill">' + (o.fund ? esc(o.fund) : '&nbsp;') + '</span></span>'
     +       '<span>Date: <span class="rsmi-fill">' + esc(o.date) + '</span></span></div>'
     +     '<div class="rsmi-notebar">'
     +       '<div>' + L.note1 + '</div>'
@@ -4359,14 +4387,30 @@ var REPORT_DOC_LABELS = {
           signName: 'BALTIMORE M. CARILLO', signTitle: 'ADMINISTRATIVE OFFICER IV/ MMS',
           form: 'SPMC-F-MMS-28', eff: 'Effectivity Date: June 20, 2022', rev: 'Rev: 0' }
 };
-function renderReportDoc_(o){ return renderRsmiTemplate(o); }
+function renderReportDoc_(o){
+  // update 89: one RSMI / RSPI per fund — each on its own page
+  if (o.parts && o.parts.length > 1){
+    return o.parts.map(function(pt, i){
+      return (i ? '<div style="break-before:page;page-break-before:always;height:0"></div><div class="rsmi-fundsep" style="margin:18px 0 6px;border-top:3px dashed #9aa7b8"></div>' : '') +
+        renderRsmiTemplate({ rsmiNo: pt.rsmiNo, date: o.date, risList: pt.risList, docType: o.docType, fund: pt.fund });
+    }).join('');
+  }
+  return renderRsmiTemplate(o);
+}
+// number i of a set: 2026-11-3688 → 2026-11-3689 …
+function rsmiNoPlus_(no, i){
+  var m = String(no || '').match(/^(.*-)(\d+)$/); if (!m || !i) return no;
+  var n = String(Number(m[2]) + i); while (n.length < m[2].length) n = '0' + n; return m[1] + n;
+}
 
 // Shared modal opener — used by Create RSMI (mode 'create'), and by
 // View from RSMI History (mode 'view', risNos empty since nothing more
 // can be selected/saved from there). Renders the document with
 // renderRsmiTemplate() and shows/hides the Save button based on mode.
 function openRsmiPreviewModal(data, risNos, mode){
-  RSMI_PREVIEW = { rsmiNo: data.rsmiNo, autoNo: data.rsmiNo, date: data.date, risList: data.risList, risNos: risNos || [], mode: mode, docType: data.docType || 'RSMI' };
+  RSMI_PREVIEW = { rsmiNo: data.rsmiNo, autoNo: data.rsmiNo, date: data.date, risList: data.risList, risNos: risNos || [], mode: mode, docType: data.docType || 'RSMI',
+                   parts: data.parts || null, fund: data.fund || (data.parts && data.parts.length === 1 ? data.parts[0].fund : '') };
+  rsmiPartsNo_();
   var mb = document.getElementById('rsmiManualBox');
   mb.style.display = mode === 'create' ? '' : 'none';
   document.getElementById('rsmiManualChk').checked = false;
@@ -4389,6 +4433,12 @@ function openRsmiPreviewModal(data, risNos, mode){
   if(data.skipped && data.skipped.length){
     summary += ' <span style="color:#8a6d00">Skipped (no longer available): ' + data.skipped.map(esc).join(', ') + '.</span>';
   }
+  var np = RSMI_PREVIEW.parts ? RSMI_PREVIEW.parts.length : 0;
+  if (np > 1) summary += ' <b style="color:#1a3a6b">→ ' + np + ' ' + RSMI_PREVIEW.docType + ' (one per fund): ' + RSMI_PREVIEW.parts.map(function(pt){ return esc(pt.fund); }).join(' · ') + '</b>';
+  else if (RSMI_PREVIEW.fund) summary += ' Fund: <b>' + esc(RSMI_PREVIEW.fund) + '</b>.';
+  var mc = document.getElementById('rsmiManualChk');
+  mc.disabled = np > 1;
+  mc.parentNode.title = np > 1 ? 'Each fund gets its own number — Manual No. is only for one fund' : '';
   document.getElementById('rsmiPrevSummary').innerHTML = summary;
   document.getElementById('rsmiPrevContent').innerHTML = renderReportDoc_(RSMI_PREVIEW);
 
@@ -4426,8 +4476,16 @@ function rsmiManualInput(){
   if (!RSMI_PREVIEW) return;
   var v = String(document.getElementById('rsmiManualNo').value || '').replace(/\s+/g, '').toUpperCase();
   RSMI_PREVIEW.rsmiNo = rsmiManualOn() ? (v || '—') : (RSMI_PREVIEW.autoShown || RSMI_PREVIEW.autoNo);
-  document.getElementById('rsmiPrevNo').textContent = RSMI_PREVIEW.rsmiNo;
+  rsmiPartsNo_();
+  document.getElementById('rsmiPrevNo').textContent = RSMI_PREVIEW.parts && RSMI_PREVIEW.parts.length > 1
+    ? RSMI_PREVIEW.parts.map(function(pt){ return pt.rsmiNo; }).join(', ') : RSMI_PREVIEW.rsmiNo;
   document.getElementById('rsmiPrevContent').innerHTML = renderReportDoc_(RSMI_PREVIEW);
+}
+
+// the numbers of a set (one per fund): the first, then the next ones
+function rsmiPartsNo_(){
+  var P = RSMI_PREVIEW; if (!P || !P.parts) return;
+  P.parts.forEach(function(pt, i){ pt.rsmiNo = i ? rsmiNoPlus_(P.rsmiNo, i) : P.rsmiNo; });
 }
 
 function closeRsmiPreviewModal(){
@@ -6283,12 +6341,20 @@ async function apRsmiOpen(key){
     var h = await sb.from('rsmi').select('*').eq('rsmi_no', no).maybeSingle();
     if (h.error) throw h.error;
     if (!h.data){ apMsg('err', 'RSMI "' + esc(no) + '" was not found.'); return; }
-    var links = await fetchAll(function(){ return sb.from('rsmi_ris').select('ris_no').eq('rsmi_no', no).order('ris_no'); });
+    var links = h.data.fund_cluster   // update 89: an RSMI per fund shows the RIS that have items of its fund
+      ? Array.from(new Set((await fetchAll(function(){ return sb.from('v_rsmi_lines').select('ris_no').eq('rsmi_no', no); })).map(function(x){ return x.ris_no; }))).sort().map(function(x){ return { ris_no: x }; })
+      : await fetchAll(function(){ return sb.from('rsmi_ris').select('ris_no').eq('rsmi_no', no).order('ris_no'); });
+    var setNos = [];
+    if (h.data.fund_cluster){
+      var head = h.data.group_no || h.data.rsmi_no;
+      setNos = (await fetchAll(function(){ return sb.from('rsmi').select('rsmi_no,fund_cluster').or('rsmi_no.eq.' + head + ',group_no.eq.' + head).order('rsmi_no'); }))
+        .map(function(x){ return x.rsmi_no + ' (' + String(x.fund_cluster || '').replace(/ Fund| Agency| Generated/g, '') + ')'; });
+    }
     var risAll = await fetchAll(function(){ return sb.from('ris').select('ris_no,release_date,end_user,status').eq('status', 'Issued').order('ris_no'); });
     var used = await fetchAll(function(){ return sb.from('rsmi_ris').select('ris_no').order('ris_no'); });
     var usedSet = {}; used.forEach(function(u){ usedSet[u.ris_no] = true; });
     var byNo = {}; risAll.forEach(function(r){ byNo[r.ris_no] = r; });
-    AP_CUR = { kind: 'rsmi', h: h.data, ris: links.map(function(l){ return byNo[l.ris_no] || { ris_no: l.ris_no }; }), remove: {}, add: [],
+    AP_CUR = { kind: 'rsmi', setNos: setNos, h: h.data, ris: links.map(function(l){ return byNo[l.ris_no] || { ris_no: l.ris_no }; }), remove: {}, add: [],
                free: risAll.filter(function(r){ return !usedSet[r.ris_no]; }) };
     apRsmiRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
@@ -6296,7 +6362,9 @@ async function apRsmiOpen(key){
 function apRsmiRender(){
   var c = AP_CUR;
   var html = apDl('apFreeRis', c.free.map(function(r){ return r.ris_no; })) +
-    '<div class="ap-h">' + esc(c.h.doc_type || 'RSMI') + ' ' + esc(c.h.rsmi_no) + (c.h.unit ? ' <span class="ap-tag">' + esc(c.h.unit) + '</span>' : '') + (c.h.manual ? ' <span class="ap-tag" title="The number was typed (manual)">MANUAL</span>' : '') + '</div><div class="ap-grid">' + apField((c.h.doc_type || 'RSMI') + ' No.', 'apRmNo', c.h.rsmi_no) + apField('RSMI Date', 'apRmDate', c.h.rsmi_date, { type: 'date' }) + '</div>' +
+    '<div class="ap-h">' + esc(c.h.doc_type || 'RSMI') + ' ' + esc(c.h.rsmi_no) + (c.h.unit ? ' <span class="ap-tag">' + esc(c.h.unit) + '</span>' : '') + (c.h.manual ? ' <span class="ap-tag" title="The number was typed (manual)">MANUAL</span>' : '') + (c.h.fund_cluster ? ' <span class="ap-tag ok">' + esc(c.h.fund_cluster) + '</span>' : '') + '</div>' +
+    (c.setNos && c.setNos.length > 1 ? '<p class="ap-hint" style="margin:-4px 0 8px">One set (made together, one per fund): <b>' + c.setNos.map(esc).join(' · ') + '</b>. Removing / adding a RIS applies to the whole set; deleting deletes the whole set.</p>' : '') +
+    '<div class="ap-grid">' + apField((c.h.doc_type || 'RSMI') + ' No.', 'apRmNo', c.h.rsmi_no) + apField('RSMI Date', 'apRmDate', c.h.rsmi_date, { type: 'date' }) + '</div>' +
     '<div class="ap-h">RIS on this RSMI</div><table class="ap-tbl"><thead><tr><th>RIS No.</th><th>Release Date</th><th>End User</th><th>Remove</th></tr></thead><tbody>' +
     c.ris.map(function(r){ var del = !!c.remove[r.ris_no];
       return '<tr class="' + (del ? 'del' : '') + '"><td><b>' + esc(r.ris_no) + '</b></td><td>' + esc(r.release_date || '') + '</td><td>' + esc(r.end_user || '') + '</td>' +
@@ -6320,13 +6388,19 @@ async function apRsmiSave(){
     if (rn.error){ apMsg('err', esc(errText(rn.error))); return; }
     c.h.rsmi_no = rn.data.rsmi_no; c.h.manual = true; RSMI_DETAIL_CACHE = {};
   }
+  var rmv = Object.keys(c.remove).filter(function(k){ return c.remove[k]; }), adds = c.add.map(function(a){ return String(a).trim(); }).filter(Boolean);
+  if (c.h.fund_cluster && (rmv.length || adds.length)){   // update 89: an RSMI per fund — the RIS belong to the whole set
+    var gr = await sb.rpc('apv_rsmi_group_ris', { p_rsmi: c.h.rsmi_no, p_remove: rmv, p_add: adds });
+    if (gr.error){ apMsg('err', esc(errText(gr.error))); return; }
+    rmv = []; adds = []; RSMI_DETAIL_CACHE = {};
+  }
   return apRpc('apv_rsmi_save', { p: { rsmi_no: c.h.rsmi_no, rsmi_date: apVal('apRmDate'),
-      remove_ris: Object.keys(c.remove).filter(function(k){ return c.remove[k]; }), add_ris: c.add.map(function(a){ return String(a).trim(); }).filter(Boolean) } },
+      remove_ris: rmv, add_ris: adds } },
     function(d){ return 'RSMI ' + esc(d.rsmi_no) + ' saved.'; }, function(d){ ISS_LOG_DATA = []; return apRsmiOpen(d.rsmi_no); });
 }
 function apRsmiDelete(){
   var c = AP_CUR;
-  if (!confirm('Delete RSMI ' + c.h.rsmi_no + '? Its RIS will go back to "waiting for RSMI". The RSMI number is not reused.')) return;
+  if (!confirm('Delete RSMI ' + c.h.rsmi_no + (c.setNos && c.setNos.length > 1 ? ' and the other RSMI of its set (' + c.setNos.join(', ') + ')' : '') + '? Its RIS will go back to "waiting for RSMI". The RSMI number is not reused.')) return;
   return apRpc('apv_rsmi_save', { p: { rsmi_no: c.h.rsmi_no, delete: true } }, function(d){ return 'RSMI ' + esc(d.rsmi_no) + ' was deleted.'; },
     function(){ ISS_LOG_DATA = []; document.getElementById('apEd').innerHTML = ''; });
 }
@@ -6339,15 +6413,21 @@ async function apXferOpen(key){
     var lots = await fetchAll(function(){ return sb.from('v_inventory_lots').select('id,item_code,description,unit,stock_unit,location,expiry_date,source_type,source_ref,qty_on_hand').eq('item_code', code).order('expiry_date', { ascending: true, nullsFirst: false }).order('id'); });
     AP_CUR = { kind: 'xfer', code: code, lots: lots };
     var locs = AP_LISTS.loc.map(function(l){ return l.location; }), K = AP_XF_KIND, mu = myUnits();
-    var kinds = [['LOCATION', '📍 Another location'], ['UNIT', '🏷 Another unit'], ['CODE', '🔢 Another item code (same unit)']];
-    var head = K === 'LOCATION' ? '<th>Move To</th>' : K === 'UNIT' ? '<th>To Unit</th><th>Location</th>' : '<th>To Item Code</th><th>Location</th>';
+    var kinds = [['LOCATION', '📍 Another location'], ['UNIT', '🏷 Another unit'], ['CODE', '🔢 Another item code (same unit)'], ['FUND', '💰 Another fund (for RSMI per fund)']];
+    var fundOf = {};   // update 89: the fund of each batch
+    if (K === 'FUND' && lots.length){
+      try { var lf = await sb.rpc('lots_fund', { p_ids: lots.map(function(l){ return l.id; }) }); (lf.data || []).forEach(function(x){ fundOf[x.lot_id] = x.fund; }); } catch(eLf){}
+    }
+    var head = K === 'LOCATION' ? '<th>Move To</th>' : K === 'FUND' ? '<th>Fund now</th><th>To Fund</th>' : K === 'UNIT' ? '<th>To Unit</th><th>Location</th>' : '<th>To Item Code</th><th>Location</th>';
     var target = function(l){
       if (K === 'LOCATION') return '<td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(locs.filter(function(x){ return x !== l.location; })) + '</select></td>';
+      if (K === 'FUND') return '<td><b>' + esc(fundOf[l.id] || '—') + '</b></td><td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(PO_FUNDS.filter(function(x){ return x !== fundOf[l.id]; })) + '</select></td>';
       var loc = '<td><select id="apXfLoc' + l.id + '"><option value="">same (' + esc(l.location || '—') + ')</option>' + apOpt(locs.filter(function(x){ return x !== l.location; })) + '</select></td>';
       if (K === 'UNIT') return '<td><select id="apXfTo' + l.id + '"><option value="">— pick —</option>' + apOpt(STOCK_UNITS.filter(function(u){ return u !== l.stock_unit; })) + '</select></td>' + loc;
       return '<td><input type="text" list="apXfCodes" id="apXfTo' + l.id + '" placeholder="type code or description" style="min-width:220px"/></td>' + loc;
     };
-    var hint = K === 'LOCATION' ? 'Moving part of a batch splits it into two batches with the same expiry and source. Stock totals and the stock card do not change.'
+    var hint = K === 'FUND' ? 'The fund of a batch decides on which RSMI / RSPI its issued items go (one per fund). A batch takes the fund of its PO; a beginning balance is Regular Agency Fund (01) — change it here. Moving part of a batch splits it into two batches. Stock totals and the stock card do not change.'
+      : K === 'LOCATION' ? 'Moving part of a batch splits it into two batches with the same expiry and source. Stock totals and the stock card do not change.'
       : K === 'UNIT' ? 'The qty goes OUT of this unit\'s stock card and IN to the other unit\'s stock card (TRF- number), with the same expiry, PO and unit cost.'
       : 'Use this when the item was received under the wrong code. The qty goes OUT of this code\'s stock card and IN to the new code\'s stock card (TRF- number), same unit, expiry, PO and unit cost.';
     document.getElementById('apEd').innerHTML = !lots.length ? '<div class="ap-empty">No stock on hand for "' + esc(code) + '".</div>' :
@@ -6359,7 +6439,7 @@ async function apXferOpen(key){
         .map(function(i){ return i.item_code + ' — ' + i.description; })) : '') +
       '<table class="ap-tbl"><thead><tr><th>Batch</th><th>Unit</th><th>Location</th><th>Expiry</th><th>Source</th><th>On Hand</th><th>Qty to Move</th>' + head + '<th></th></tr></thead><tbody>' +
       lots.map(function(l){
-        var mine = K === 'LOCATION' || !mu || mu.indexOf(l.stock_unit) !== -1;
+        var mine = K === 'LOCATION' || K === 'FUND' || !mu || mu.indexOf(l.stock_unit) !== -1;
         return '<tr><td>#' + l.id + '</td><td>' + esc(l.stock_unit || '') + '</td><td><b>' + esc(l.location || '—') + '</b></td><td>' + esc(l.expiry_date || 'no expiry') + '</td><td>' + esc(l.source_ref || l.source_type) + '</td><td>' + l.qty_on_hand + '</td>' +
           (mine ? '<td><input type="number" min="1" max="' + l.qty_on_hand + '" id="apXfQ' + l.id + '" value="' + l.qty_on_hand + '"/></td>' + target(l) +
             '<td><button class="ap-btn sm" onclick="apXferDo(' + l.id + ')">Transfer</button></td>'
@@ -6374,6 +6454,11 @@ function apXferDo(lotId){
     if (!to){ apMsg('err', 'Pick the location to move to.'); return; }
     return apRpc('apv_transfer', { p: { lot_id: lotId, qty: q, to_location: to, date: apVal('apXfDate'), remarks: apVal('apXfRem') } },
       function(){ return 'Moved ' + esc(q) + ' to ' + esc(to) + '.'; }, function(){ apXferLog(); return apXferOpen(AP_CUR.code); });
+  }
+  if (K === 'FUND'){
+    if (!to){ apMsg('err', 'Pick the fund to transfer to.'); return; }
+    return apRpc('apv_transfer_fund', { p: { lot_id: lotId, qty: q, to_fund: to, date: apVal('apXfDate'), remarks: apVal('apXfRem') } },
+      function(d){ return 'Moved ' + esc(q) + ' to ' + esc(to) + (d && d.from_fund ? ' (was ' + esc(d.from_fund) + ')' : '') + '.'; }, function(){ apXferLog(); return apXferOpen(AP_CUR.code); });
   }
   if (!to){ apMsg('err', K === 'UNIT' ? 'Pick the unit to transfer to.' : 'Type the item code to transfer to.'); return; }
   var tc = K === 'CODE' ? to.split(' — ')[0].trim().toUpperCase() : '';
@@ -6392,7 +6477,7 @@ async function apXferLog(){
     el.innerHTML = '<div class="ap-h">Recent transfers</div>' + (!(r.data || []).length ? '<div class="ap-empty">No transfers yet.</div>' :
       '<table class="ap-tbl ap-log"><thead><tr><th>Date</th><th>TRF #</th><th>Type</th><th>Item</th><th>From</th><th>To</th><th>Qty</th><th>By</th><th>Remarks</th></tr></thead><tbody>' +
       r.data.map(function(t){
-        var k = t.kind || 'LOCATION', from = k === 'UNIT' ? t.from_unit : k === 'CODE' ? t.item_code : t.from_location, to = k === 'UNIT' ? t.to_unit : k === 'CODE' ? t.to_code : t.to_location;
+        var k = t.kind || 'LOCATION', from = k === 'UNIT' ? t.from_unit : k === 'CODE' ? t.item_code : k === 'FUND' ? t.from_fund : t.from_location, to = k === 'UNIT' ? t.to_unit : k === 'CODE' ? t.to_code : k === 'FUND' ? t.to_fund : t.to_location;
         return '<tr><td>' + esc(t.transfer_date) + '</td><td>' + esc(t.trf_no || '') + '</td><td>' + esc(k) + '</td><td>' + esc(t.item_code) + '</td><td>' + esc(from || '') + '</td><td>' + esc(to || '') + '</td><td>' + t.qty + '</td><td>' + esc(t.done_by || '') + '</td><td>' + esc(t.remarks || '') + '</td></tr>'; }).join('') + '</tbody></table>');
   } catch(e){}
 }
