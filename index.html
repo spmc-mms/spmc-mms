@@ -2723,11 +2723,28 @@ function rcSelectPo(poNo){
   RC_INOUT = isInOut(po.txnType); RC_TXN = po.txnType || '';
   RC_CATERING = RC_CAT === 'CATERING' || RC_INOUT;
   var mixed = Object.keys(po.units || {}).length > 1;
-  pill.textContent = '📦 PO ' + poNo + ' [' + (po.category || '') + (mixed ? ' · MIXED — ' + RC_CAT + ' items only, own IAR' : '') + ' · ' + (po.txnType || 'REGULAR STOCK') + '] — ' + open.length + ' item line(s) with open balance' +
-    (RC_INOUT ? '  ·  🔄 IN & OUT: not stocked — on Save the items are issued at once to each line\'s end user. No Location / Expiry needed.'
+  var cur = po.txnType || 'REGULAR STOCK';
+  pill.innerHTML = esc('📦 PO ' + poNo + ' [' + (po.category || '') + (mixed ? ' · MIXED — ' + RC_CAT + ' items only, own IAR' : '') + '] — ' + open.length + ' item line(s) with open balance') +
+    ' · Type of Transaction: <select id="rcTxn" onchange="rcChangeTxn(this)" style="font-size:.85rem;padding:2px 4px;font-weight:700">' +
+    TXN_TYPES.map(function(t){ return '<option' + (t === cur ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select>' +
+    esc(RC_INOUT ? '  ·  🔄 IN & OUT: not stocked — on Save the items are issued at once to each line\'s end user. No item code, Location or Expiry needed.'
      : RC_CAT === 'CATERING' ? '  ·  🍽 CATERING: received only, not added to stock — no Location / Expiry needed.' : '');
   pill.classList.add('show');
   rcRenderRows();
+}
+
+// Type of Transaction of the PO, changed on Receive (update 93) — e.g. REGULAR STOCK → EXPENSE (no item code needed)
+async function rcChangeTxn(el){
+  var po = RC_PO_MAP[RC_PO]; if (!po) return;
+  var from = po.txnType || 'REGULAR STOCK', to = el.value;
+  if (to === from) return;
+  if (!confirm('Change the Type of Transaction of PO ' + RC_PO + ' from ' + from + ' to ' + to + '?' +
+      (isInOut(to) ? '\n\n' + to + ' is IN & OUT: on Save the items are issued at once to the end user — not stocked, no item code needed.' : '\n\n' + to + ' is stocked: every item needs its Assigned Code.'))){ el.value = from; return; }
+  var r = await sb.rpc('set_po_txn_type', { p_po: RC_PO, p_txn: to });
+  if (r.error){ el.value = from; rcAlert('error', errText(r.error) + (/set_po_txn_type/.test(errText(r.error)) ? ' — has update 93 been run?' : '')); return; }
+  Object.keys(RC_PO_MAP).forEach(function(k){ if (k === RC_PO) RC_PO_MAP[k].txnType = to; });
+  rcAlert('success', 'PO ' + RC_PO + ' is now ' + to + ' — in the Edit Log.');
+  rcSelectPo(RC_PO);
 }
 
 // ── rows ────────────────────────────────────────────────────────────────────
