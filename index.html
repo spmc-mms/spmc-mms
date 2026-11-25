@@ -5852,6 +5852,8 @@ async function apPoOpen(key){
     if (PO_GROUPS_ON) await poLineGroups_(po, lines, 'po_line_id');
     var rl = await fetchAll(function(){ return sb.from('v_receipt_lines').select('receive_id,receipt_line_id,po_line_id,date,iar_no,qty_received,unit_cost').eq('po_number', po).order('date').order('receive_id'); });
     // LOT breakdowns of this PO's deliveries (shown under their PO item)
+    var convByLine = {};   // update 94: unit conversions of the deliveries
+    try { var cv = await sb.rpc('po_line_convs', { p_po: po }); (cv.data || []).forEach(function(x){ convByLine[x.po_line_id] = x; }); } catch(eCv){}
     var partsByLine = {};
     try {
       var rids = rl.map(function(x){ return x.receive_id; }).filter(function(v, i, a){ return a.indexOf(v) === i; });
@@ -5863,7 +5865,7 @@ async function apPoOpen(key){
       if (!a.some(function(y){ return y.id === x.receive_id; })) a.push({ id: x.receive_id, d: x.date, iar: x.iar_no }); });
     var legacy = {}; try { (await fetchAll(function(){ return sb.from('v_po_beg_balance').select('po_line_id,legacy_delivered,legacy_note,received_in_app').eq('po_number', po).order('po_line_id'); }))
       .forEach(function(x){ legacy[x.po_line_id] = x; }); } catch(e){}
-    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {}, legacy: legacy, partsByLine: partsByLine };
+    AP_CUR = { kind: 'po', h: h.data, lines: lines, del: {}, add: [], rcvByLine: rcvByLine, free: {}, legacy: legacy, partsByLine: partsByLine, convByLine: convByLine };
     if (!PO_OPTS.MODE.length) await poLoadOpts();
     apPoRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
@@ -5958,9 +5960,11 @@ function apPoRender(){
           ? '<div style="margin-top:3px;font-size:.74rem;line-height:1.5">' + c.rcvByLine[l.po_line_id].map(function(x){
               return '<a href="#" title="Open this receipt in Receive / IAR" onclick="event.preventDefault();apRcvGo(\'' + esc(x.id) + '\')"><b>' + esc(x.id) + '</b></a> <span class="ap-ro">' + esc(toMDY(x.d) || '') + (x.iar ? ' · IAR ' + esc(x.iar) : '') + '</span>'; }).join('<br>') + '</div>'
           : apNum(l.qty_delivered) > 0 ? '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#5b21b6">delivered before the app (old monitoring) — no RCV</div>'
-          : '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#b9770e">NO DELIVERY YET</div>') + '</td>' +
+          : '<div class="ap-ro" style="margin-top:3px;font-size:.72rem;color:#b9770e">NO DELIVERY YET</div>') +
+        (c.convByLine && c.convByLine[l.po_line_id] && c.convByLine[l.po_line_id].conv ? '<div style="margin-top:3px;font-size:.74rem;color:#0f5132;font-weight:700">⇄ ' + esc(c.convByLine[l.po_line_id].conv) + '</div>' : '') + '</td>' +
       '<td>' + (apNum(l.qty_delivered) > 0 ? '<span class="ap-ro">has deliveries</span>' : '<input type="checkbox" ' + (del ? 'checked' : '') + ' onchange="AP_CUR.del[' + l.po_line_id + ']=this.checked;apPoRender()"/>') +
-        (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') + '</td></tr>';
+        (apPoFreeOk_(h, l) && !c.free[l.po_line_id] ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#6a1fb0" title="Supplier gave extra of this item for free" onclick="apPoFreeOpen(' + l.po_line_id + ')">🎁 Free goods</button></div>' : '') +
+        (c.convByLine && c.convByLine[l.po_line_id] && c.convByLine[l.po_line_id].open_rcv > 0 ? '<div><button class="ap-btn sm gray" style="margin-top:4px;color:#0f5132" title="Convert the unit of the received qty (e.g. 1 BOX = 10 PCS)" onclick="apPoConvert(' + l.po_line_id + ')">⇄ Convert unit</button></div>' : '') + '</td></tr>';
     (c.partsByLine && c.partsByLine[l.po_line_id] || []).forEach(function(b){
       html += '<tr><td colspan="11" style="background:#f8fafc;padding:8px 10px 10px 24px"><div class="ap-ro" style="font-size:.75rem;margin-bottom:2px">from <a href="#" onclick="event.preventDefault();apRcvGo(\'' + esc(b.rl.receive_id) + '\')"><b>' + esc(b.rl.receive_id) + '</b></a>' + (b.rl.iar_no ? ' · IAR ' + esc(b.rl.iar_no) : '') + '</div>' + apRcvPartsHtml_(b.rl, b.pp) + '</td></tr>';
     });
@@ -6394,6 +6398,20 @@ function apRsmiRender(){
     '<button class="ap-btn gray ap-print" onclick="viewRsmiClick(null,\'' + esc(c.h.rsmi_no) + '\')">🖨 View / Print RSMI</button>' +
     '<button class="ap-btn red" onclick="apRsmiDelete()">🗑 Delete RSMI</button></div>';
   document.getElementById('apEd').innerHTML = html; apLock();
+}
+// Approvals → PO → ⇄ Convert unit (update 94): the received qty of a PO item in another unit, e.g. 1 BOX = 10 PCS
+async function apPoConvert(lineId){
+  var c = AP_CUR, l = (c.lines || []).filter(function(x){ return x.po_line_id === lineId; })[0]; if (!l) return;
+  var from = l.po_unit || l.unit || 'unit';
+  var u = prompt('Convert ' + (l.item_code || '') + ' — the NEW unit (e.g. PCS):', 'PCS'); if (u == null) return;
+  u = String(u).trim().toUpperCase(); if (!u){ apMsg('err', 'Type the new unit.'); return; }
+  var f = prompt('1 ' + from + ' = how many ' + u + '?', ''); if (f == null) return;
+  f = Number(f); if (!(f > 0) || f === 1){ apMsg('err', 'Type how many ' + esc(u) + ' are in 1 ' + esc(from) + ' (more than 1).'); return; }
+  if (!confirm('Convert ' + (l.item_code || '') + ': 1 ' + from + ' = ' + f + ' ' + u + '?\n\nEvery delivery of this PO item not converted yet: its batches and stock card x' + f + ', the item code\'s unit becomes ' + u + ', the IAR shows the qty in ' + u + '. Logged in the Edit Log.')) return;
+  var r = await sb.rpc('apv_po_line_convert', { p_line: lineId, p_factor: f, p_unit: u });
+  if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_po_line_convert/.test(errText(r.error)) ? ' — has update 94 been run?' : '')); return; }
+  await apPoOpen(c.h.po_number);
+  apMsg('ok', '✅ Converted (' + esc(r.data.receipts) + '): 1 ' + esc(from) + ' = ' + f + ' ' + esc(u) + ' — in the Edit Log.');
 }
 async function apRsmiSave(){
   var c = AP_CUR;
