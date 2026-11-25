@@ -6403,10 +6403,23 @@ function apRsmiRender(){
 async function apPoConvert(lineId){
   var c = AP_CUR, l = (c.lines || []).filter(function(x){ return x.po_line_id === lineId; })[0]; if (!l) return;
   var from = l.po_unit || l.unit || 'unit';
-  var u = prompt('Convert ' + (l.item_code || '') + ' — the NEW unit (e.g. PCS):', 'PCS'); if (u == null) return;
+  var mode = prompt('⇄ ' + (l.item_code || '') + ' — which one?\n\n' +
+    '1 = CONVERT the received qty (received 85 ' + from + ' → becomes 850 PCS in stock)\n' +
+    '2 = it was ALREADY RECEIVED in the new unit (PO 35 ' + from + ', received / IAR 350 PCS) — the PO delivered qty is fixed, the stock stays\n\nType 1 or 2:', '1');
+  if (mode == null) return; mode = String(mode).trim();
+  if (mode !== '1' && mode !== '2'){ apMsg('err', 'Type 1 or 2.'); return; }
+  var u = prompt((mode === '2' ? 'The unit it was received in' : 'Convert ' + (l.item_code || '') + ' — the NEW unit') + ' (e.g. PCS):', 'PCS'); if (u == null) return;
   u = String(u).trim().toUpperCase(); if (!u){ apMsg('err', 'Type the new unit.'); return; }
   var f = prompt('1 ' + from + ' = how many ' + u + '?', ''); if (f == null) return;
   f = Number(f); if (!(f > 0) || f === 1){ apMsg('err', 'Type how many ' + esc(u) + ' are in 1 ' + esc(from) + ' (more than 1).'); return; }
+  if (mode === '2'){
+    if (!confirm((l.item_code || '') + ' was received already in ' + u + ' (1 ' + from + ' = ' + f + ' ' + u + ')?\n\nThe receipt, IAR and stock stay as they are; the PO delivered qty is divided by ' + f + ' (e.g. 350 → 35 ' + from + '), and the receipt is marked converted. Logged in the Edit Log.')) return;
+    var r2 = await sb.rpc('apv_po_line_mark_converted', { p_line: lineId, p_factor: f, p_unit: u });
+    if (r2.error){ apMsg('err', '❌ ' + esc(errText(r2.error)) + (/apv_po_line_mark_converted/.test(errText(r2.error)) ? ' — has update 95 been run?' : '')); return; }
+    await apPoOpen(c.h.po_number);
+    apMsg('ok', '✅ Fixed (' + esc(r2.data.receipts) + '): received in ' + esc(u) + ', 1 ' + esc(from) + ' = ' + f + ' ' + esc(u) + ' — PO delivered is now ' + esc(r2.data.qty_delivered) + ' ' + esc(from) + '. In the Edit Log.');
+    return;
+  }
   if (!confirm('Convert ' + (l.item_code || '') + ': 1 ' + from + ' = ' + f + ' ' + u + '?\n\nEvery delivery of this PO item not converted yet: its batches and stock card x' + f + ', the item code\'s unit becomes ' + u + ', the IAR shows the qty in ' + u + '. Logged in the Edit Log.')) return;
   var r = await sb.rpc('apv_po_line_convert', { p_line: lineId, p_factor: f, p_unit: u });
   if (r.error){ apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_po_line_convert/.test(errText(r.error)) ? ' — has update 94 been run?' : '')); return; }
