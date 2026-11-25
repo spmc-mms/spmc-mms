@@ -7511,10 +7511,10 @@ function sopDeliveryGrid(){
   return '<div class="ap-scroll" style="max-height:420px"><table class="ap-tbl sop-grid"><thead>' + head + '</thead><tbody>' + body + foot + '</tbody></table></div>' +
     '<p class="ap-hint" style="margin:6px 0 0">Each DR column = qty delivered on that DR (value at the bottom). Purple columns = delivered <b>before the app</b> (PO Beg. Balance). Undelivered = qty ordered − delivered; the cancelled part is shown separately and is included in the Undelivered amount (same as LESS: UNDELIVERED ITEMS). Days late = actual delivery date − deadline (' + (dl ? esc(toMDY(dl)) : 'no deadline set') + '). Columns marked <i>date received</i> have no DR typed yet.' +
     (E.head.cancel_date ? ' Undelivered balance was cancelled on <b>' + esc(toMDY(E.head.cancel_date)) + '</b>.' : '') + '</p>' +
-    (CAN_EDIT && (E.receipts.length || Object.keys(E.legacy || {}).length) ? '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:.8rem">📑 DR / Delivery Dates of: ' +
+    (CAN_EDIT && (E.receipts.length || Object.keys(E.legacy || {}).length) ? '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.8rem;color:#1a2b45;font-weight:700">📑 DR / Delivery Dates of: ' +
       (Object.keys(E.legacy || {}).length ? '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem;background:#f3efff;color:#5b2c6f" onclick="sopLegacyDrEdit()">Before the app (PO Beg. Balance)</button>' : '') +
       E.receipts.map(function(r){
-      return '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem" onclick="sopDrEdit(\'' + esc(r.receive_id) + '\')">' + esc(r.receive_id) + ' · ' + esc(toMDY(r.date_received)) + '</button>'; }).join('') + '</div>' : '');
+      return '<button class="sx-btn" style="padding:3px 8px;font-size:.78rem;background:#1f3a68;color:#fff;font-weight:700;border:1px solid #1f3a68" onclick="sopDrEdit(\'' + esc(r.receive_id) + '\')">' + esc(r.receive_id) + ' · ' + esc(toMDY(r.date_received)) + '</button>'; }).join('') + '</div>' : '');
 }
 function sopDrEdit(rid){
   var po = SOP_ED && SOP_ED.head.po_number; if (!po) return;
