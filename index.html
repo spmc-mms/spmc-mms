@@ -5893,11 +5893,31 @@ async function apPoFreeSave(id){
   await apPoOpen(po);
   apMsg('ok', '✅ 🎁 Free goods added to ' + esc(r.data.receive_id) + ' — on its IAR as "— FREE GOODS", in stock at zero cost. The PO balance did not change.');
 }
+async function apPoMoveReceived_(sel, to){
+  var h = AP_CUR.h, codes = {}, missing = [];
+  (AP_CUR.lines || []).forEach(function(l){
+    var el = document.getElementById('apPlA' + l.po_line_id), v = el ? String(el.value || '').split(' — ')[0].trim().toUpperCase() : '';
+    if (/^(AUTO|TMP)-/.test(v)) v = '';
+    if (v) codes[l.po_line_id] = v;
+    else if ((AP_CUR.rcvByLine[l.po_line_id] || []).length) missing.push(l.po_description || l.item_code);
+  });
+  if (missing.length){ sel.value = h.category; apMsg('err', 'PO ' + esc(h.po_number) + ' was already received. Type the <b>' + esc(to) + '</b> item code of each item in <b>Assigned Code</b> first, then pick ' + esc(to) + ' again. Missing: ' + missing.map(esc).join('; ')); return; }
+  if (!confirm('Move PO ' + h.po_number + ' (already received) from ' + h.category + ' to ' + to + '?\n\nIts receipts (same RCV and IAR No.), batches and stock card move to ' + to + ' under these item codes:\n' +
+      Object.keys(codes).map(function(k){ var l = AP_CUR.lines.filter(function(x){ return String(x.po_line_id) === k; })[0]; return '• ' + (l ? (l.po_description || l.item_code) : k) + ' → ' + codes[k]; }).join('\n') +
+      '\n\nOnly possible if none of it was issued yet. Logged in the Edit Log.')){ sel.value = h.category; return; }
+  var r = await sb.rpc('apv_po_move_received', { p_po: h.po_number, p_unit: to, p_codes: codes });
+  if (r.error){ sel.value = h.category; apMsg('err', '❌ ' + esc(errText(r.error)) + (/apv_po_move_received/.test(errText(r.error)) ? ' — has update 96 been run?' : '')); return; }
+  await apPoOpen(h.po_number);
+  apMsg('ok', '✅ PO ' + esc(h.po_number) + ' is now ' + esc(to) + ' — ' + r.data.receipts + ' receipt(s) and ' + r.data.codes + ' item code(s) moved. In the Edit Log.');
+}
 // change the unit of a PO (coded units only) — received stock moves with it if none was issued yet
 var AP_UNIT_SWAP = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM', 'EQUIPMENT', 'HARDWARE', 'CATERING'];   // update 79: all units
 var AP_UNIT_CODED = ['SUPPLIES UNIT', 'DRUGS AND MEDS', 'GASES', 'NSCM'];
 function apPoUnit(sel){
   var h = AP_CUR.h, to = sel.value;
+  // update 96: a RECEIVED EQUIPMENT / HARDWARE / CATERING PO → a coded unit: the item codes come from "Assigned Code"
+  var received = Object.keys(AP_CUR.rcvByLine || {}).some(function(k){ return (AP_CUR.rcvByLine[k] || []).length; });
+  if (received && AP_UNIT_CODED.indexOf(h.category) === -1 && AP_UNIT_CODED.indexOf(to) !== -1) return apPoMoveReceived_(sel, to);
   var both = AP_UNIT_CODED.indexOf(h.category) !== -1 && AP_UNIT_CODED.indexOf(to) !== -1;
   if (!confirm('Change PO ' + h.po_number + ' from ' + h.category + ' to ' + to + '?\n\n' + (both
       ? 'Its items (and any stock already received from it) will belong to ' + to + '.'
