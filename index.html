@@ -6157,10 +6157,15 @@ async function apRcvOpen(key){
       poLines = await fetchAll(function(){ return sb.from('v_po_lines').select('po_line_id,item_code,description,po_description,unit,qty_ordered,qty_delivered,qty_cancelled,balance').eq('po_number', h.data.po_number).order('po_line_id'); });
       var ph = await sb.from('po_headers').select('category,txn_type').eq('po_number', h.data.po_number).maybeSingle(); poH = ph.data;
     }
-    AP_CUR = { kind: 'rcv', h: h.data, lines: lines, issued: issued, parts: parts, stocked: lots.length > 0, del: {}, poLines: poLines, poH: poH, addOpen: false, addv: {} };
+    // unit conversions of the lines (1 BOX = 10 PCS): shown in the converted unit, like the IAR and the stock
+    var conv = {};
+    try { (await fetchAll(function(){ return sb.from('v_iar_lines').select('receipt_line_id,conv_factor,po_unit').eq('receive_id', id).is('part_id', null); }))
+            .forEach(function(x){ if (x.conv_factor && Number(x.conv_factor) !== 1) conv[x.receipt_line_id] = { f: Number(x.conv_factor), u: x.po_unit || '' }; }); } catch(eCv){}
+    AP_CUR = { kind: 'rcv', conv: conv, h: h.data, lines: lines, issued: issued, parts: parts, stocked: lots.length > 0, del: {}, poLines: poLines, poH: poH, addOpen: false, addv: {} };
     apRcvRender();
   } catch(e){ apMsg('err', esc(errText(e))); }
 }
+function apRound_(v){ return Math.round(Number(v) * 10000) / 10000; }
 function apRcvRender(){
   var c = AP_CUR, h = c.h;
   var html = apDl('apSupDl', AP_LISTS.sup.map(function(s){ return s.supplier_name; })) +
@@ -6175,11 +6180,14 @@ function apRcvRender(){
     '<p class="ap-hint">To move stock to another location, use the 🔁 Transfer of Item tab.</p>' +
     '<div class="ap-h">Items received</div><div class="ap-scroll"><table class="ap-tbl"><thead><tr><th>Item</th><th>Unit</th><th>Qty Received</th><th>Already Issued</th><th>Unit Cost</th><th>Expiry</th><th>Remarks / Brand</th><th>Batch/Lot #</th><th>Remove</th></tr></thead><tbody>';
   c.lines.forEach(function(l){
-    var id = l.receipt_line_id, del = !!c.del[id], iss = c.issued[id] || 0, pp = c.parts[id];
+    var id = l.receipt_line_id, del = !!c.del[id], iss = c.issued[id] || 0, pp = c.parts[id], cv = c.conv && c.conv[id];
     html += '<tr class="' + (del ? 'del' : '') + '"><td>' + (l.item_code.indexOf('AUTO-') === 0 ? '' : '<b>' + esc(l.item_code) + '</b> ') + esc(l.description) + (l.free_goods ? ' <span class="ap-tag" style="background:#f0e6ff;color:#6a1fb0">🎁 FREE GOODS</span>' : '') +
         (pp ? '<div class="ap-ro" style="font-size:.78rem;margin-top:3px">🧩 LOT with a breakdown of ' + pp.length + ' piece(s) — listed below</div>' : '') + '</td><td>' + esc(l.unit || '') + '</td>' +
-      '<td><input type="number" min="0" id="apRlQ' + id + '" value="' + l.qty_received + '"' + (pp ? ' readonly title="LOT with a breakdown — remove the line and receive again to change it"' : '') + '/></td><td>' + (iss ? '<b>' + iss + '</b>' + (pp ? ' pc' : '') : '0') + '</td>' +
-      '<td><input type="number" min="0" step="0.01" id="apRlU' + id + '" value="' + l.unit_cost + '"/></td>' +
+      (cv ? '<td><input type="number" id="apRlQ' + id + '" value="' + apRound_(l.qty_received * cv.f) + '" readonly title="Received with a unit conversion — remove the line and receive again to change the qty"/>' +
+              '<div class="ap-ro" style="font-size:.72rem;color:#0f5132">= ' + apRound_(l.qty_received) + ' ' + esc(cv.u || 'PO unit') + ' (1 ' + esc(cv.u || '') + ' = ' + cv.f + ' ' + esc(l.unit || '') + ')</div></td>'
+          : '<td><input type="number" min="0" id="apRlQ' + id + '" value="' + l.qty_received + '"' + (pp ? ' readonly title="LOT with a breakdown — remove the line and receive again to change it"' : '') + '/></td>') +
+      '<td>' + (iss ? '<b>' + iss + '</b>' + (pp ? ' pc' : '') : '0') + '</td>' +
+      '<td><input type="number" min="0" step="0.0001" id="apRlU' + id + '" value="' + (cv ? apRound_(l.unit_cost / cv.f) : l.unit_cost) + '"' + (cv ? ' title="per ' + esc(l.unit || '') + ' (the PO cost per ' + esc(cv.u || '') + ' ÷ ' + cv.f + ')"' : '') + '/></td>' +
       (pp ? '<td class="ap-ro">per piece</td>' : '<td><input type="date" id="apRlE' + id + '" value="' + esc(l.expiry_date || '') + '"/></td>') +
       '<td><input type="text" id="apRlR' + id + '" maxlength="200" value="' + esc(l.remarks || '') + '" placeholder="e.g. Brand: …"/></td>' +
       '<td><input type="text" id="apRlB' + id + '" maxlength="60" value="' + esc(l.batch_no || '') + '" placeholder="Batch / Lot #"/></td>' +
@@ -6304,6 +6312,11 @@ async function apRcvSave(){
     lines: c.lines.map(function(l){
       var id = l.receipt_line_id;
       if (c.del[id]) return { id: id, delete: true };
+      var cv = c.conv && c.conv[id];   // converted line: qty stays, the cost per PCS goes back to the cost per BOX
+      if (cv){
+        var uc = Number(apVal('apRlU' + id));
+        return { id: id, qty_received: l.qty_received, unit_cost: uc === apRound_(l.unit_cost / cv.f) ? l.unit_cost : apRound_(uc * cv.f), expiry_date: apVal('apRlE' + id) };
+      }
       return c.parts[id] ? { id: id, unit_cost: apVal('apRlU' + id) }
                          : { id: id, qty_received: apVal('apRlQ' + id), unit_cost: apVal('apRlU' + id), expiry_date: apVal('apRlE' + id) };
     }) };
