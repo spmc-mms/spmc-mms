@@ -1832,7 +1832,11 @@ function pcTabs(){
   return ME.role === 'Approver' ? PC_ALL_TABS.concat([['todo', '📝 To Do']]) : PC_ALL_TABS;   // To Do: the Approver only
 }
 function pcLocName(l){ return l || '(NO LOCATION)'; }
-function pcDesc(code){ var it = (AP_LISTS ? AP_LISTS.items : []).find(function(i){ return i.item_code === code; }); return it ? it : null; }
+// item boxes show "CODE — DESCRIPTION"; the code is the part before " — "
+function pcCode(v){ return String(v || '').split(' — ')[0].trim().toUpperCase(); }
+function pcItemOpt(i){ var v = i.item_code + ' — ' + (i.description || ''); return '<option value="' + esc(v) + '"></option>'; }
+function pcItemTxt(code){ var it = pcDesc(code); return it ? it.item_code + ' — ' + (it.description || '') : (code || ''); }
+function pcDesc(code){ code = pcCode(code); var it = (AP_LISTS ? AP_LISTS.items : []).find(function(i){ return i.item_code === code; }); return it ? it : null; }
 async function pcRpc(fn, args){ var r = await sb.rpc(fn, args); if (r.error) throw r.error; return r.data; }
 async function pcDo(fn, args, okText, after){
   var btns = document.querySelectorAll('#pcMain button'); btns.forEach(function(b){ b.disabled = true; });
@@ -2210,7 +2214,7 @@ function pcScRender(){
       '<button class="ap-btn green" onclick="pcScSave()">💾 Save pre-count of ' + esc(L) + '</button></div>');
   document.getElementById('pcScOut').innerHTML = h;
   var dl = document.getElementById('pcItemList');
-  if (dl) dl.innerHTML = items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('');
+  if (dl) dl.innerHTML = items.map(pcItemOpt).join('');
   pcScFind();
 }
 function pcAddDesc(){ var c = document.getElementById('pcAddCode').value.trim().toUpperCase(), it = pcDesc(c); document.getElementById('pcAddDescTxt').textContent = c ? (it ? it.description + ' · ' + (it.unit || '') : 'not in the item list') : ''; }
@@ -2223,7 +2227,7 @@ function pcScFind(){
 }
 // add an item found at this location (or set the pre-count of a row already in the list)
 function pcScAdd(){
-  var code = document.getElementById('pcAddCode').value.trim().toUpperCase(), it = pcDesc(code);
+  var code = pcCode(document.getElementById('pcAddCode').value), it = pcDesc(code);
   var ne = document.getElementById('pcAddNoExp').checked, exp = ne ? '' : document.getElementById('pcAddExp').value;
   var qty = document.getElementById('pcAddQty').value, rem = document.getElementById('pcAddRem').value.trim();
   var err = !it ? 'Pick the item from the list (search by code or description).' : (!ne && !exp) ? 'Type the expiry date (or tick "No expiry").' : qty === '' ? 'Type the pre-count.' : '';
@@ -2313,7 +2317,7 @@ async function pcCount(){
       '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
       '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()" placeholder="code / description / encoder" value="' + esc(PC.histQ || '') + '"/></div></div>' +
       '<div id="pcCAllSum" class="ap-note" style="margin-bottom:6px"></div><div id="pcCList"></div>' +
-      '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
+      '<datalist id="pcCEItemList">' + items.map(pcItemOpt).join('') + '</datalist>' + apDl('pcCELocList', locs);
     document.getElementById('pcBody').innerHTML = h; pcCList(); return;
   }
   if (!ro){
@@ -2322,7 +2326,7 @@ async function pcCount(){
       '<div class="ap-f" style="min-width:240px"><label>Location *</label><input type="text" id="pcCLoc" list="pcCLocList"/>' + apDl('pcCLocList', locs) + '</div></div>' +
       '<div class="rp-filters" style="align-items:flex-end">' +
       '<div class="ap-f" style="min-width:300px;flex:1" id="pcCCodeBox"><label>Item — search code or description</label><input type="text" id="pcCCode" list="pcCItemList" oninput="pcCShowDesc()" placeholder="Type to search…"/><datalist id="pcCItemList">' +
-        items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' +
+        items.map(pcItemOpt).join('') + '</datalist>' +
         '<div class="ap-ro" id="pcCDesc" style="margin-top:3px"></div></div>' +
       '<div class="ap-f" id="pcCAddBox" style="display:none;min-width:260px"><label>Description (for add code)</label><input type="text" id="pcCAddD"/></div>' +
       '<div class="ap-f" id="pcCAddUBox" style="display:none;min-width:90px"><label>Unit</label><input type="text" id="pcCAddU"/></div>' +
@@ -2336,7 +2340,7 @@ async function pcCount(){
   }
   if (pcIsApv()) h += '<div id="pcToAdd"></div>';
   if (!ro) h += '<div id="pcCMine"></div>';
-  h += '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
+  h += '<datalist id="pcCEItemList">' + items.map(pcItemOpt).join('') + '</datalist>' + apDl('pcCELocList', locs);
   document.getElementById('pcBody').innerHTML = h;
   if (!ro){ document.getElementById('pcCDay').value = dSel; pcCCart(); }
   pcCLists(); if (pcIsApv()) pcToAddPanel();
@@ -2351,7 +2355,7 @@ function pcCRowHtml(r, withBy){
     var dOpts = [1,2,3,4].map(function(d){ return '<option value="' + d + '"' + (r.day_no == d ? ' selected' : '') + '>Day ' + d + '</option>'; }).join('');
     return '<tr style="background:#fff8e6"><td><select id="pcE_day">' + dOpts + '</select></td>' +
       '<td><input type="text" id="pcE_loc" list="pcCELocList" value="' + esc(r.location) + '" style="min-width:130px"/></td>' +
-      (r.item_code ? '<td colspan="2"><input type="text" id="pcE_code" list="pcCEItemList" value="' + esc(r.item_code) + '" style="min-width:200px"/></td><td>' + esc(it ? it.unit || '' : '') + '</td>'
+      (r.item_code ? '<td colspan="2"><input type="text" id="pcE_code" list="pcCEItemList" value="' + esc(pcItemTxt(r.item_code)) + '" style="min-width:260px"/></td><td>' + esc(it ? it.unit || '' : '') + '</td>'
                    : '<td><span class="ap-tag warn">TO ADD</span></td><td><input type="text" id="pcE_addD" value="' + esc(r.add_description || '') + '"/></td><td><input type="text" id="pcE_addU" value="' + esc(r.add_unit || '') + '" style="width:70px"/></td>') +
       '<td style="white-space:nowrap"><input type="date" id="pcE_exp" value="' + esc(r.expiry_date || '') + '"' + (r.no_expiry ? ' disabled' : '') + ' style="max-width:150px"/> <label style="font-size:.75rem"><input type="checkbox" id="pcE_noexp"' + (r.no_expiry ? ' checked' : '') + ' onchange="var e=document.getElementById(\'pcE_exp\');e.disabled=this.checked;if(this.checked)e.value=\'\'"/> No expiry</label></td>' +
       '<td><input type="number" id="pcE_qty" min="0" step="any" value="' + esc(r.qty) + '" style="width:90px"/></td>' +
@@ -2380,7 +2384,7 @@ function pcCEditSave(id){
   var g = function(i){ var e = document.getElementById(i); return e ? e : null; };
   var p = { day_no: g('pcE_day').value, location: g('pcE_loc').value, no_expiry: g('pcE_noexp').checked, expiry_date: g('pcE_noexp').checked ? '' : g('pcE_exp').value,
             qty: g('pcE_qty').value, remarks: g('pcE_rem').value };
-  if (g('pcE_code')) p.item_code = g('pcE_code').value.trim().toUpperCase();
+  if (g('pcE_code')) p.item_code = pcCode(g('pcE_code').value);
   if (g('pcE_addD')){ p.add_description = g('pcE_addD').value; p.add_unit = g('pcE_addU').value; }
   pcDo('rpci_count_edit', { p_id: id, p: p }, function(d){ return d.changed ? 'Count row changed: ' + esc(d.changes) + (ME.role === 'Approver' ? '' : ' — the Approver will check it (To Do).') : 'Nothing changed.'; },
     async function(){ PC.editId = null; await pcLoadCounts(true); pcCLists(); if (pcIsApv()) pcToAddPanel(); });
@@ -2397,7 +2401,7 @@ function pcCAdd(){
   if (PC.cart.length >= 10){ pcMsg('err', 'Up to 10 items per submit — Submit these first.'); return; }
   var loc = document.getElementById('pcCLoc').value.trim().toUpperCase();
   var add = document.getElementById('pcCToAdd').checked, ne = document.getElementById('pcCNoExp').checked;
-  var code = document.getElementById('pcCCode').value.trim().toUpperCase(), it = pcDesc(code);
+  var code = pcCode(document.getElementById('pcCCode').value), it = pcDesc(code);
   var r = { location: loc, to_add: add, item_code: add ? '' : code, description: add ? document.getElementById('pcCAddD').value.trim().toUpperCase() : (it ? it.description : ''),
             add_description: add ? document.getElementById('pcCAddD').value.trim() : '', add_unit: add ? document.getElementById('pcCAddU').value.trim() : '',
             unit: add ? document.getElementById('pcCAddU').value.trim().toUpperCase() : (it ? it.unit : ''),
@@ -2458,13 +2462,13 @@ function pcToAddPanel(){
     '<div class="ap-hint">Make the item code first in Approvals → Master Lists → Item Codes if it is new. Tick the rows that get the same code.</div>' +
     '<table class="ap-tbl"><tr><th></th><th>Day</th><th>Location</th><th>Description (typed)</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>By</th></tr>' +
     rows.map(function(r){ return '<tr><td><input type="checkbox" class="pcTaChk" value="' + r.id + '"/></td><td>' + r.day_no + '</td><td>' + esc(r.location) + '</td><td>' + esc(r.add_description || '') + '</td><td>' + esc(r.add_unit || '') + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td><td style="text-align:right">' + pcN(r.qty) + '</td><td class="ap-ro">' + esc(r.encoded_by || '') + '</td></tr>'; }).join('') +
-    '</table><div class="ap-actions"><div class="ap-f" style="min-width:240px"><label>Item code</label><input type="text" id="pcTaCode" list="pcCItemList"/></div>' +
+    '</table><div class="ap-actions"><div class="ap-f" style="min-width:240px"><label>Item — search code or description</label><input type="text" id="pcTaCode" list="pcCItemList" style="min-width:320px"/></div>' +
     '<button class="ap-btn green" onclick="pcTaAssign()" style="align-self:flex-end">✔ Give this code to the ticked rows</button></div>'
     : '<div class="ap-note" style="margin-bottom:10px">No "For add code" rows waiting.</div>');
 }
 function pcTaAssign(){
   var ids = Array.prototype.map.call(document.querySelectorAll('.pcTaChk:checked'), function(c){ return +c.value; });
-  var code = document.getElementById('pcTaCode').value.trim().toUpperCase();
+  var code = pcCode(document.getElementById('pcTaCode').value);
   if (!ids.length || !code){ pcMsg('err', 'Tick the rows and type the item code.'); return; }
   pcDo('rpci_assign_code', { p_ids: ids, p_code: code }, function(d){ return d.rows + ' row(s) now ' + esc(code) + '.'; }, async function(){ await pcLoadCounts(true); pcCList(); pcToAddPanel(); });
 }
