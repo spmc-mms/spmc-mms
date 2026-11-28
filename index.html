@@ -512,7 +512,7 @@ tr.row-unclaimed{background:#fffaf0}
 #dashMain .d-pill{background:#fff;border-radius:10px;padding:10px 16px;box-shadow:0 2px 6px rgba(0,0,0,.06);font-size:.82rem;color:#555;cursor:pointer}
 #dashMain .d-pill b{font-size:1.1rem;color:#1a3a5c;margin-right:6px}
 /* ── APPROVALS + REPORTS ───────────────────────────────────────── */
-#apMain .subtabs,#rpMain .subtabs{flex-wrap:wrap;margin-bottom:-1px;gap:6px}
+#apMain .subtabs,#rpMain .subtabs,#pcMain .subtabs{flex-wrap:wrap;margin-bottom:-1px;gap:6px}
 .ap-panel{border-top-left-radius:0}
 .ap-note{font-size:.78rem;color:#888}
 .ap-msg{display:none;padding:11px 15px;border-radius:8px;font-size:.86rem;margin-bottom:14px}
@@ -821,6 +821,7 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
     <a onclick="showPage('approvals')" id="navAP">✅ Approvals</a>
     <div class="lbl">Reports</div>
     <a onclick="showPage('reports')" id="navRP">📊 Reports</a>
+    <a onclick="showPage('rpci')" id="navRPCI">📋 Physical Count (RPCI)</a>
   </nav>
   <div class="sb-bot">
     <div class="uinfo"><strong id="sfn">—</strong><span id="srl">—</span></div>
@@ -1018,6 +1019,23 @@ body .pt-gray{background:linear-gradient(135deg,#aab7b8,#717d7e) !important}
   <div class="ap-msg" id="apMsg"></div>
   <div class="subtabs" id="apTabs"></div>
   <div class="panel ap-panel" id="apBody"><div class="ap-empty">Loading…</div></div>
+</div>
+
+<div id="pcMain" style="display:none">
+  <div class="topbar"><h1>📋 Physical Count (RPCI)</h1>
+    <div class="toolbar">
+      <select id="pcPer" onchange="pcPickPeriod()" style="padding:8px 10px;border:1.5px solid #d0d7e2;border-radius:7px;font-size:.86rem;max-width:420px"></select>
+      <button class="btn btn-load" onclick="pcLoadPeriods()">↻ Refresh</button>
+      <button class="btn btn-export" id="pcEditBtn" onclick="pcPeriodForm(false)" style="display:none">✎ Period</button>
+      <button class="btn btn-new" id="pcNewBtn" onclick="pcPeriodForm(true)" style="display:none">+ New count</button>
+    </div>
+  </div>
+  <div class="rp-sub" id="pcInfo" style="margin:0 0 10px"></div>
+  <div class="subtabs" id="pcTabs"></div>
+  <div class="panel ap-panel">
+    <div class="ap-msg" id="pcMsg"></div>
+    <div id="pcBody"></div>
+  </div>
 </div>
 
 <div id="rpMain" style="display:none">
@@ -1723,9 +1741,18 @@ function showApp(){
 
   if (ME.role === 'Inspector' || ME.role === 'Acceptor'){
     // Inspector / Acceptor only use the PO Status Trail page.
-    ['navIss','navRcv','navPO','navDash','navAP','navRP','navSOP','navDOC'].forEach(function(id){ document.getElementById(id).style.display = 'none'; });
+    ['navIss','navRcv','navPO','navDash','navAP','navRP','navSOP','navDOC','navRPCI'].forEach(function(id){ document.getElementById(id).style.display = 'none'; });
     setLoading(false);
     showPage('potrail');
+    return;
+  }
+  if (ME.role === 'Accounting'){
+    // Accounting only uses the Physical Count (RPCI) page — step 5 Accounting (and the RPCI print).
+    ['navIss','navRcv','navPO','navDash','navAP','navRP','navSOP','navDOC','navPT'].forEach(function(id){ document.getElementById(id).style.display = 'none'; });
+    document.querySelectorAll('.sidebar .nav .lbl').forEach(function(l){ l.style.display = 'none'; });
+    TODAY_STR = ymd(new Date());
+    setLoading(false);
+    showPage('rpci');
     return;
   }
   if (!CAN_EDIT) document.getElementById('btnNewReq').style.display = 'none';
@@ -1743,7 +1770,7 @@ function showApp(){
   var h = location.hash.replace('#','');
   if (h === 'approvals' && ['Admin','Approver','Encoder'].indexOf(ME.role) === -1) h = '';
   if ((h === 'sop' || h === 'docs') && !CAN_EDIT) h = '';
-  showPage(['issuance','receive','po','potrail','dashboard','approvals','reports','sop','docs'].indexOf(h) !== -1 ? h : 'dashboard');
+  showPage(['issuance','receive','po','potrail','dashboard','approvals','reports','sop','docs','rpci'].indexOf(h) !== -1 ? h : 'dashboard');
 }
 
 var ISS_LOADED = false;
@@ -1755,6 +1782,9 @@ function showPage(p){
   document.getElementById('dashMain').style.display = p === 'dashboard' ? '' : 'none';
   document.getElementById('apMain').style.display = p === 'approvals' ? '' : 'none';
   document.getElementById('rpMain').style.display = p === 'reports' ? '' : 'none';
+  document.getElementById('pcMain').style.display = p === 'rpci' ? '' : 'none';
+  document.getElementById('navRPCI').classList.toggle('active', p === 'rpci');
+  if (p === 'rpci') pcInit();
   document.getElementById('sopMain').style.display = p === 'sop' ? '' : 'none';
   document.getElementById('navSOP').classList.toggle('active', p === 'sop');
   if (p === 'sop') sopInit();
@@ -1776,6 +1806,614 @@ function showPage(p){
   try { if (location.hash !== '#' + p) history.replaceState(null, '', '#' + p); } catch(e) {}
   if (p === 'issuance' && !ISS_LOADED){ ISS_LOADED = true; loadReqLog(); }
   if (p === 'receive') rcInit();
+}
+
+// ── PHYSICAL COUNT (RPCI) — update 97 ─────────────────────────────────────────
+var PC = { init: false, periods: [], per: null, tab: null, sheet: null, counts: null, cart: [], recon: null, sig: {}, acc: null, rep: null };
+var PC_ALL_TABS = [['pre', '1 Pre-count Sheet'], ['sheet', '2 Pre-count → Count Sheet'], ['count', '3 Count'], ['recon', '4 Reconcile'],
+                   ['acctg', '5 Accounting'], ['rpci', '6 RPCI'], ['post', '7 Post / Beg. Balance']];
+var PC_MARKS = ['OK', 'NEEDS RIS', 'NEEDS PO', 'ADJUST'];
+var PC_SIG_KEYS = [['rpci_entity', 'Entity name'], ['rpci_inv_type', 'Type of inventory item'],
+  ['rpci_off_name', 'Accountable officer'], ['rpci_off_pos', 'Official designation'], ['rpci_off_date', 'Date of assumption'],
+  ['rpci_cc1_name', 'Certified correct — Chair'], ['rpci_cc1_pos', 'Position'], ['rpci_cc2_name', 'Certified correct — Member'], ['rpci_cc2_pos', 'Position'],
+  ['rpci_cc3_name', 'Certified correct — Member'], ['rpci_cc3_pos', 'Position'], ['rpci_app_name', 'Approved by'], ['rpci_app_pos', 'Position'],
+  ['rpci_ver_name', 'Verified by (COA)'], ['rpci_ver_pos', 'Position']];
+
+function pcN(v){ var n = Number(v); if (v == null || v === '' || isNaN(n)) return ''; return n.toLocaleString('en-US', { maximumFractionDigits: 4 }); }
+function pcP(v){ return (Number(v) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function pcMsg(kind, html){ var b = document.getElementById('pcMsg'); b.className = 'ap-msg ' + (kind || ''); b.innerHTML = html || ''; if (html) window.scrollTo(0, 0); }
+function pcIsApv(){ return ME.role === 'Approver'; }
+function pcIsMgr(){ return ME.role === 'Approver' || ME.role === 'Admin'; }
+function pcCanEnc(){ return ['Admin','Approver','Encoder','Viewer'].indexOf(ME.role) !== -1; }
+function pcOpen(){ return PC.per && PC.per.status === 'OPEN'; }
+function pcTabs(){ return ME.role === 'Accounting' ? PC_ALL_TABS.filter(function(t){ return t[0] === 'acctg' || t[0] === 'rpci'; }) : PC_ALL_TABS; }
+function pcLocName(l){ return l || '(NO LOCATION)'; }
+function pcDesc(code){ var it = (AP_LISTS ? AP_LISTS.items : []).find(function(i){ return i.item_code === code; }); return it ? it : null; }
+async function pcRpc(fn, args){ var r = await sb.rpc(fn, args); if (r.error) throw r.error; return r.data; }
+async function pcDo(fn, args, okText, after){
+  var btns = document.querySelectorAll('#pcMain button'); btns.forEach(function(b){ b.disabled = true; });
+  try { var d = await pcRpc(fn, args); pcMsg('ok', '✅ ' + okText(d || {})); if (after) await after(d || {}); }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); }
+  finally { btns.forEach(function(b){ b.disabled = false; }); }
+}
+
+async function pcInit(){
+  if (!PC.init){
+    PC.init = true;
+    try { await apLoadLists(); } catch(e){}
+  }
+  await pcLoadPeriods();
+}
+async function pcLoadPeriods(keep){
+  try {
+    var r = await sb.from('rpci_periods').select('*').order('as_of', { ascending: false }).order('unit');
+    if (r.error) throw r.error;
+    var us = myUnits();
+    PC.periods = (r.data || []).filter(function(p){ return ME.role === 'Accounting' || !us || us.indexOf(p.unit) !== -1; });
+  } catch(e){ pcMsg('err', '❌ ' + esc(errText(e)) + ' — was update 97 run in Supabase?'); PC.periods = []; }
+  var sel = document.getElementById('pcPer'), cur = keep || (PC.per && PC.per.id);
+  sel.innerHTML = PC.periods.length ? PC.periods.map(function(p){
+      return '<option value="' + p.id + '">' + esc(p.unit) + ' — as at ' + esc(toMDY(p.as_of)) + (p.title ? ' · ' + esc(p.title) : '') + (p.status === 'POSTED' ? ' (POSTED)' : '') + '</option>';
+    }).join('') : '<option value="">— no count yet —</option>';
+  if (cur && PC.periods.some(function(p){ return p.id == cur; })) sel.value = cur;
+  document.getElementById('pcNewBtn').style.display = pcIsMgr() ? '' : 'none';
+  document.getElementById('pcEditBtn').style.display = pcIsMgr() && PC.periods.length ? '' : 'none';
+  pcPickPeriod();
+}
+function pcPickPeriod(){
+  var id = document.getElementById('pcPer').value;
+  PC.per = PC.periods.find(function(p){ return String(p.id) === String(id); }) || null;
+  PC.sheet = PC.counts = PC.recon = PC.acc = PC.rep = null; PC.cart = [];
+  var tabs = pcTabs();
+  document.getElementById('pcTabs').innerHTML = tabs.map(function(t){ return '<button class="subtab-btn" id="pcTab_' + t[0] + '" onclick="pcSwitch(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('');
+  pcInfo();
+  pcSwitch(PC.tab && tabs.some(function(t){ return t[0] === PC.tab; }) ? PC.tab : tabs[0][0]);
+}
+function pcInfo(){
+  var p = PC.per, el = document.getElementById('pcInfo');
+  if (!p){ el.innerHTML = ''; return; }
+  var days = [1,2,3,4].map(function(d){ return p['day' + d] ? 'Day ' + d + ' = ' + toMDY(p['day' + d]) : ''; }).filter(Boolean).join(' · ');
+  el.innerHTML = '<span class="ap-tag ' + (p.status === 'POSTED' ? 'ok' : 'warn') + '">' + esc(p.status) + '</span> ' +
+    '<b>' + esc(p.unit) + '</b> · as at ' + esc(toMDY(p.as_of)) + (days ? ' · ' + esc(days) : '') +
+    (p.snapshot_at ? ' · system balance taken ' + esc(toMDYTime(p.snapshot_at)) : '') + (p.posted_at ? ' · posted ' + esc(toMDYTime(p.posted_at)) + ' by ' + esc(p.posted_by || '') : '');
+}
+function pcSwitch(t){
+  PC.tab = t; pcMsg('');
+  document.querySelectorAll('#pcTabs .subtab-btn').forEach(function(b){ b.classList.toggle('active', b.id === 'pcTab_' + t); });
+  var body = document.getElementById('pcBody');
+  if (!PC.per){ body.innerHTML = '<div class="ap-empty">' + (pcIsMgr() ? 'No count period yet — click <b>+ New count</b> to make one (the system balance of the unit is taken at that moment).' : 'No count period yet — the Approver makes one.') + '</div>'; return; }
+  body.innerHTML = '<div class="ap-empty">Loading…</div>';
+  ({ pre: pcPre, sheet: pcSheetTab, count: pcCount, recon: pcRecon, acctg: pcAcctg, rpci: pcRpci, post: pcPost })[t]();
+}
+
+// ── period form ────────────────────────────────────────────────────────────────
+function pcPeriodForm(isNew){
+  var p = isNew ? {} : (PC.per || {});
+  if (!isNew && !PC.per) return;
+  var us = myUnits() || STOCK_UNITS;
+  var y = new Date().getFullYear();
+  var h = '<div class="ap-h">' + (isNew ? '+ New count period' : '✎ Count period') + '</div>' +
+    '<div class="ap-grid">' +
+    (isNew ? '<div class="ap-f"><label>Unit</label><select id="pcFUnit">' + apOpt(us, u1() || us[0]) + '</select></div>' : apField('Unit', 'pcFUnit', p.unit, { ro: true })) +
+    apField('As at (date of the RPCI)', 'pcFAsof', p.as_of || (y + '-12-31'), { type: 'date' }) +
+    apField('Title (optional)', 'pcFTitle', p.title || '') +
+    apField('Day 1', 'pcFD1', p.day1 || '', { type: 'date' }) + apField('Day 2', 'pcFD2', p.day2 || '', { type: 'date' }) +
+    apField('Day 3', 'pcFD3', p.day3 || '', { type: 'date' }) + apField('Day 4', 'pcFD4', p.day4 || '', { type: 'date' }) +
+    '</div><div class="ap-hint">' + (isNew ? 'Saving takes the system balance of the unit now (per batch: location, expiry, fund) — that is the BALANCE on the Pre-count Sheet.' : 'Changing the dates does not change the system balance taken. Use ↻ Retake system balance for that.') + '</div>' +
+    '<div class="ap-actions"><button class="ap-btn green" onclick="pcPeriodSave(' + (isNew ? 'null' : p.id) + ')">💾 Save</button>' +
+    '<button class="ap-btn gray" onclick="pcSwitch(PC.tab)">Cancel</button>' +
+    (!isNew && pcIsMgr() && pcOpen() ? '<button class="ap-btn orange" onclick="pcSnapshot()">↻ Retake system balance</button>' : '') +
+    (!isNew && pcIsApv() && pcOpen() ? '<button class="ap-btn red" onclick="pcPeriodDel()">🗑 Delete this count</button>' : '') + '</div>';
+  pcMsg(''); document.getElementById('pcBody').innerHTML = h;
+}
+function pcPeriodSave(id){
+  var p = { id: id, unit: document.getElementById('pcFUnit').value, as_of: document.getElementById('pcFAsof').value,
+            title: document.getElementById('pcFTitle').value,
+            day1: document.getElementById('pcFD1').value, day2: document.getElementById('pcFD2').value,
+            day3: document.getElementById('pcFD3').value, day4: document.getElementById('pcFD4').value };
+  pcDo('rpci_period_save', { p: p }, function(){ return 'Count period saved.'; }, function(d){ return pcLoadPeriods(d.id); });
+}
+function pcSnapshot(){
+  if (!confirm('Take the system balance again (now)? The Pre-count Sheet BALANCE will change to today\'s stock.')) return;
+  pcDo('rpci_snapshot', { p_period: PC.per.id }, function(d){ return 'System balance taken again: ' + d.lots + ' batch(es).'; }, function(){ return pcLoadPeriods(PC.per.id); });
+}
+function pcPeriodDel(){
+  if (!confirm('Delete this count period with ALL its pre-count, count, reconcile and accounting rows?')) return;
+  pcDo('rpci_period_delete', { p_period: PC.per.id }, function(){ return 'Count period deleted.'; }, function(){ PC.per = null; return pcLoadPeriods(); });
+}
+
+// ── data ─────────────────────────────────────────────────────────────────────
+async function pcLoadSheet(force){
+  if (PC.sheet && !force) return PC.sheet;
+  var r = await sb.rpc('rpci_sheet', { p_period: PC.per.id }); if (r.error) throw r.error;
+  PC.sheet = r.data || []; return PC.sheet;
+}
+async function pcLoadCounts(force){
+  if (PC.counts && !force) return PC.counts;
+  PC.counts = await fetchAll(function(){ return sb.from('rpci_counts').select('*').eq('period_id', PC.per.id).order('id', { ascending: false }); });
+  return PC.counts;
+}
+function pcSheetLocs(rows){ var a = []; rows.forEach(function(r){ var l = pcLocName(r.location); if (a.indexOf(l) === -1) a.push(l); }); return a.sort(); }
+
+// ── 1 Pre-count Sheet ──────────────────────────────────────────────────────────
+async function pcPre(){
+  try { await pcLoadSheet(true); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var rows = PC.sheet, locs = pcSheetLocs(rows);
+  var h = '<div class="rp-filters"><div class="ap-f" style="min-width:260px"><label>Location</label><select id="pcPreLoc" onchange="pcPreTable()"><option value="">All locations (' + locs.length + ')</option>' + apOpt(locs) + '</select></div>' +
+    '<button class="ap-btn" onclick="pcPrintSheet(\'pre\', document.getElementById(\'pcPreLoc\').value)">🖨 Print Pre-count Sheet</button>' +
+    (pcIsMgr() && pcOpen() ? '<button class="ap-btn orange" onclick="pcSnapshot()">↻ Retake system balance</button>' : '') + '</div>' +
+    '<div class="ap-hint">BALANCE = the system balance when the count period was made (one row per item + expiry, per location; locations A → Z). ADVANCE ✓ = the batch came from an Advance. 5 blank rows are added per location for items found there.</div>' +
+    '<div id="pcPreOut"></div>';
+  document.getElementById('pcBody').innerHTML = h; pcPreTable();
+}
+function pcPreTable(){
+  var loc = document.getElementById('pcPreLoc').value;
+  var rows = PC.sheet.filter(function(r){ return !loc || pcLocName(r.location) === loc; });
+  document.getElementById('pcPreOut').innerHTML = rows.length ? '<div class="ap-scroll"><table class="ap-tbl"><tr><th>Location</th><th>Code</th><th>Item description</th><th>Units</th><th style="text-align:right">Balance</th><th>Expiry</th><th>Advance</th></tr>' +
+    rows.map(function(r){ return '<tr><td>' + esc(pcLocName(r.location)) + '</td><td>' + esc(r.item_code) + '</td><td>' + esc(r.description || '') + '</td><td>' + esc(r.uom || '') + '</td><td style="text-align:right">' + pcN(r.system_qty) + '</td><td>' + esc(r.expiry_date ? toMDY(r.expiry_date) : '') + '</td><td>' + (r.is_advance ? '✓' : '') + '</td></tr>'; }).join('') +
+    '</table></div>' : '<div class="ap-empty">No stock in the system balance.</div>';
+}
+
+var PC_PRINT_CSS = '@page{size:13in 8.5in;margin:.35in .4in}body{font-family:Arial,Helvetica,sans-serif;font-size:10.5px;color:#000;margin:0}' +
+  '.sec{page-break-after:always}.sec:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse}thead{display:table-header-group}' +
+  '.hd td{border:0;padding:1px 4px;font-size:11px}.hd .c{text-align:center}.hd .ttl{font-weight:700;font-size:13px;white-space:nowrap}.hd .r{text-align:right;white-space:nowrap}.hd .l{white-space:nowrap}' +
+  'th{border:1px solid #000;padding:4px 3px;font-size:10px}td.b{border:1px solid #000;padding:3px 4px;height:19px;vertical-align:middle}' +
+  '.n{text-align:right}.ct{text-align:center}.ck{font-size:9px;white-space:nowrap}.ln{display:inline-block;border-bottom:1px solid #000;min-width:190px}';
+function pcPrintSheet(kind, loc){
+  var rows = (PC.sheet || []).filter(function(r){ return !loc || pcLocName(r.location) === loc; });
+  if (kind === 'count') rows = rows.filter(function(r){ return Number(r.precount) !== 0 || Number(r.system_qty) !== 0; });
+  var locs = pcSheetLocs(rows); if (!locs.length && loc) locs = [loc];
+  if (!locs.length){ pcMsg('err', 'Nothing to print.'); return; }
+  var w = window.open('', '_blank'); if (!w){ pcMsg('err', 'Please allow pop-ups for this site to print.'); return; }
+  var pre = kind === 'pre';
+  var html = locs.map(function(L){
+    var rs = rows.filter(function(r){ return pcLocName(r.location) === L; });
+    var head = '<tr class="hd"><td colspan="2" class="l"></td><td colspan="4" class="c ttl">SOUTHERN PHILIPPINES MEDICAL CENTER</td><td colspan="2"></td></tr>' +
+      '<tr class="hd"><td colspan="2" class="l">LOCATION: <span class="ln">' + esc(L) + '</span></td><td colspan="4" class="c">' + (pre ? 'PRE-COUNT FORM' : 'INVENTORY COUNT FORM') + '</td>' +
+        '<td colspan="2" class="r">' + (pre ? 'PRE-COUNTED BY:' : 'TEAM MEMBERS:') + ' <span class="ln" style="min-width:230px">&nbsp;</span></td></tr>' +
+      '<tr class="hd"><td colspan="2"></td><td colspan="4" class="c">' + (pre ? 'DATE OF PRE-COUNT:' : 'DATE OF COUNT:') + ' <span class="ln" style="min-width:110px">&nbsp;</span></td><td colspan="2"></td></tr>' +
+      '<tr class="hd"><td colspan="8" style="height:6px"></td></tr>' +
+      '<tr><th style="width:9%">CODE</th><th style="width:33%">ITEM DESCRIPTION</th><th style="width:6%">UNITS</th><th style="width:7%">' + (pre ? 'BALANCE' : 'PRE-COUNT') + '</th>' +
+      '<th style="width:9%">EXPIRY DATE</th><th style="width:7%">ADVANCE</th><th style="width:8%">' + (pre ? 'PRE-COUNT' : 'COUNT') + '</th><th>REMARKS</th></tr>';
+    var body = rs.map(function(r){
+      return '<tr><td class="b">' + esc(r.item_code) + '</td><td class="b">' + esc(r.description || '') + '</td><td class="b ct">' + esc(r.uom || '') + '</td>' +
+        '<td class="b n">' + pcN(pre ? r.system_qty : r.precount) + '</td><td class="b ct">' + esc(r.expiry_date ? toMDY(r.expiry_date) : '') + '</td>' +
+        '<td class="b ck">' + (r.is_advance ? '☑' : '☐') + ' Check</td><td class="b"></td><td class="b">' + (!pre && r.precount_remarks ? esc(r.precount_remarks) : '') + '</td></tr>';
+    }).join('');
+    for (var i = 0; i < 5; i++) body += '<tr><td class="b"></td><td class="b"></td><td class="b"></td><td class="b"></td><td class="b"></td><td class="b ck">☐ Check</td><td class="b"></td><td class="b"></td></tr>';
+    return '<div class="sec"><table><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
+  }).join('');
+  w.document.open();
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + (pre ? 'Pre-count Form' : 'Inventory Count Form') + '</title><style>' + PC_PRINT_CSS + '</style></head><body>' + html + '</body></html>');
+  w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+}
+
+// ── 2 Pre-count encode → Count Sheet ───────────────────────────────────────────
+async function pcSheetTab(){
+  try { await pcLoadSheet(true); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var locs = pcSheetLocs(PC.sheet);
+  var allLocs = (AP_LISTS ? AP_LISTS.loc : []).map(function(l){ return l.location; });
+  var stat = locs.map(function(L){
+    var rs = PC.sheet.filter(function(r){ return pcLocName(r.location) === L; });
+    var saved = rs.some(function(r){ return r.precount_saved; });
+    return '<span class="ap-tag ' + (saved ? 'ok' : '') + '" style="margin:2px">' + esc(L) + (saved ? ' ✓' : '') + '</span>';
+  }).join(' ');
+  var h = '<div class="rp-filters"><div class="ap-f" style="min-width:260px"><label>Location</label><input type="text" id="pcScLoc" list="pcLocList" onchange="pcScTable()" placeholder="Pick or type the location"/>' + apDl('pcLocList', locs.concat(allLocs.filter(function(l){ return locs.indexOf(l) === -1; }))) + '</div>' +
+    '<button class="ap-btn" onclick="pcPrintSheet(\'count\', document.getElementById(\'pcScLoc\').value.trim().toUpperCase())">🖨 Print Count Sheet (this location)</button>' +
+    '<button class="ap-btn gray" onclick="pcPrintSheet(\'count\', \'\')">🖨 Print Count Sheet (all locations)</button></div>' +
+    '<div class="ap-hint">Encode the pre-count per location (it starts at the system balance). The variance stays here on screen only — the Count Sheet prints the PRE-COUNT. Locations with ✓ are saved:</div>' +
+    '<div style="margin:-6px 0 14px">' + (stat || '—') + '</div><div id="pcScOut"></div>';
+  document.getElementById('pcBody').innerHTML = h;
+}
+var PC_SC = [];
+function pcScTable(){
+  var L = document.getElementById('pcScLoc').value.trim().toUpperCase(); var out = document.getElementById('pcScOut');
+  if (!L){ out.innerHTML = ''; return; }
+  PC_SC = PC.sheet.filter(function(r){ return pcLocName(r.location) === L; }).map(function(r){
+    return { item_code: r.item_code, description: r.description, uom: r.uom, expiry_date: r.expiry_date, adv: r.is_advance, sys: Number(r.system_qty) || 0, qty: r.precount, remarks: r.precount_remarks || '', saved: r.precount_saved };
+  });
+  pcScRender();
+}
+function pcScRender(){
+  var L = document.getElementById('pcScLoc').value.trim().toUpperCase(), ro = !pcOpen() || !pcCanEnc();
+  var items = (AP_LISTS ? AP_LISTS.items : []);
+  var h = '<div class="ap-scroll"><table class="ap-tbl"><tr><th>Code</th><th>Item description</th><th>Units</th><th>Expiry</th><th>Adv.</th><th style="text-align:right">System</th><th style="width:110px">Pre-count</th><th style="text-align:right">Variance</th><th>Remarks</th><th></th></tr>' +
+    PC_SC.map(function(r, i){
+      var v = (Number(r.qty) || 0) - r.sys;
+      return '<tr><td>' + (r.isNew && !ro ? '<input type="text" list="pcItemList" value="' + esc(r.item_code || '') + '" onchange="pcScSet(' + i + ',\'item_code\',this.value)"/>' : esc(r.item_code)) + '</td>' +
+        '<td>' + esc(r.description || '') + '</td><td>' + esc(r.uom || '') + '</td>' +
+        '<td>' + (r.isNew && !ro ? '<input type="date" value="' + esc(r.expiry_date || '') + '" onchange="pcScSet(' + i + ',\'expiry_date\',this.value)"/>' : esc(r.expiry_date ? toMDY(r.expiry_date) : '')) + '</td>' +
+        '<td>' + (r.adv ? '✓' : '') + '</td><td style="text-align:right">' + pcN(r.sys) + '</td>' +
+        '<td><input type="number" min="0" step="any" value="' + esc(r.qty == null ? '' : r.qty) + '" ' + (ro ? 'readonly' : '') + ' oninput="pcScSet(' + i + ',\'qty\',this.value)"/></td>' +
+        '<td style="text-align:right" id="pcScV' + i + '" class="' + (v < 0 ? 'rp-out' : v > 0 ? 'rp-in' : '') + '">' + (v ? pcN(v) : '') + '</td>' +
+        '<td><input type="text" value="' + esc(r.remarks) + '" ' + (ro ? 'readonly' : '') + ' oninput="pcScSet(' + i + ',\'remarks\',this.value)"/></td>' +
+        '<td>' + (r.isNew && !ro ? '<button class="ap-btn sm red" onclick="PC_SC.splice(' + i + ',1);pcScRender()">✕</button>' : '') + '</td></tr>';
+    }).join('') + '</table></div>' + apDl('pcItemList', []) +
+    (ro ? '' : '<div class="ap-actions"><button class="ap-btn gray" onclick="PC_SC.push({isNew:true,sys:0,qty:\'\',remarks:\'\'});pcScRender()">+ Item found here (not in the list)</button>' +
+      '<button class="ap-btn green" onclick="pcScSave()">💾 Save pre-count of ' + esc(L) + '</button></div>');
+  document.getElementById('pcScOut').innerHTML = h;
+  var dl = document.getElementById('pcItemList');
+  if (dl) dl.innerHTML = items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('');
+}
+function pcScSet(i, k, v){
+  var r = PC_SC[i]; r[k] = v;
+  if (k === 'item_code'){ var it = pcDesc(String(v).trim().toUpperCase()); r.item_code = String(v).trim().toUpperCase(); r.description = it ? it.description : '(not in the item list)'; r.uom = it ? it.unit : ''; pcScRender(); return; }
+  if (k === 'qty'){ var d = (Number(v) || 0) - r.sys, c = document.getElementById('pcScV' + i); if (c){ c.textContent = d ? pcN(d) : ''; c.className = d < 0 ? 'rp-out' : d > 0 ? 'rp-in' : ''; } }
+}
+function pcScSave(){
+  var L = document.getElementById('pcScLoc').value.trim().toUpperCase();
+  var bad = PC_SC.find(function(r){ return r.qty === '' || r.qty == null || !r.item_code; });
+  if (bad){ pcMsg('err', 'Type the pre-count of every row (0 if none), and the code of the added rows.'); return; }
+  var rows = PC_SC.map(function(r){ return { item_code: r.item_code, expiry_date: r.expiry_date || '', qty: r.qty, remarks: r.remarks }; });
+  pcDo('rpci_precount_save', { p_period: PC.per.id, p_location: L, p_rows: rows }, function(d){ return 'Pre-count of ' + esc(L) + ' saved (' + d.rows + ' rows).'; },
+    async function(){ await pcSheetTab(); document.getElementById('pcScLoc').value = L; pcScTable(); });
+}
+
+// ── 3 Count ──────────────────────────────────────────────────────────────────────
+async function pcCount(){
+  try { await pcLoadCounts(true); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var p = PC.per, ro = !pcOpen() || !pcCanEnc();
+  var dayOpts = [1,2,3,4].map(function(d){ return '<option value="' + d + '">Day ' + d + (p['day' + d] ? ' — ' + esc(toMDY(p['day' + d])) : '') + '</option>'; }).join('');
+  var today = TODAY_STR, dSel = 1; [1,2,3,4].forEach(function(d){ if (p['day' + d] === today) dSel = d; });
+  var locs = (AP_LISTS ? AP_LISTS.loc : []).map(function(l){ return l.location; });
+  var items = (AP_LISTS ? AP_LISTS.items : []);
+  var h = '';
+  if (!ro){
+    h += '<div class="ap-h">Encode the count — add up to 10 items, then Submit</div>' +
+      '<div class="rp-filters"><div class="ap-f"><label>Count day</label><select id="pcCDay">' + dayOpts + '</select></div>' +
+      '<div class="ap-f" style="min-width:240px"><label>Location *</label><input type="text" id="pcCLoc" list="pcCLocList"/>' + apDl('pcCLocList', locs) + '</div></div>' +
+      '<div class="rp-filters" style="align-items:flex-end">' +
+      '<div class="ap-f" style="min-width:230px" id="pcCCodeBox"><label>Item code</label><input type="text" id="pcCCode" list="pcCItemList" oninput="pcCShowDesc()"/><datalist id="pcCItemList">' +
+        items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' +
+        '<div class="ap-ro" id="pcCDesc" style="margin-top:3px"></div></div>' +
+      '<div class="ap-f" id="pcCAddBox" style="display:none;min-width:260px"><label>Description (for add code)</label><input type="text" id="pcCAddD"/></div>' +
+      '<div class="ap-f" id="pcCAddUBox" style="display:none;min-width:90px"><label>Unit</label><input type="text" id="pcCAddU"/></div>' +
+      '<label style="display:flex;gap:5px;align-items:center;font-size:.8rem;margin-bottom:8px"><input type="checkbox" id="pcCToAdd" onchange="pcCToggle()"/> For add code</label>' +
+      '<div class="ap-f" style="min-width:150px"><label>Expiry date *</label><input type="date" id="pcCExp"/></div>' +
+      '<label style="display:flex;gap:5px;align-items:center;font-size:.8rem;margin-bottom:8px"><input type="checkbox" id="pcCNoExp" onchange="pcCToggle()"/> No expiry</label>' +
+      '<div class="ap-f" style="min-width:100px;max-width:120px"><label>Count *</label><input type="number" id="pcCQty" min="0" step="any" onkeydown="if(event.key===\'Enter\')pcCAdd()"/></div>' +
+      '<div class="ap-f" style="min-width:160px"><label>Remarks</label><input type="text" id="pcCRem" onkeydown="if(event.key===\'Enter\')pcCAdd()"/></div>' +
+      '<button class="ap-btn" onclick="pcCAdd()" style="margin-bottom:2px">+ Add</button></div>' +
+      '<div id="pcCCart"></div>';
+  }
+  if (pcIsApv()) h += '<div id="pcToAdd"></div>';
+  h += '<div class="ap-h">Counted</div><div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
+    '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
+    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()"/></div></div><div id="pcCList"></div>';
+  document.getElementById('pcBody').innerHTML = h;
+  if (!ro){ document.getElementById('pcCDay').value = dSel; pcCCart(); }
+  pcCList(); if (pcIsApv()) pcToAddPanel();
+}
+function pcCShowDesc(){ var c = document.getElementById('pcCCode').value.trim().toUpperCase(), it = pcDesc(c); document.getElementById('pcCDesc').textContent = c ? (it ? it.description + ' · ' + (it.unit || '') : 'not in the item list — tick "For add code"') : ''; }
+function pcCToggle(){
+  var add = document.getElementById('pcCToAdd').checked, ne = document.getElementById('pcCNoExp').checked;
+  document.getElementById('pcCCodeBox').style.display = add ? 'none' : '';
+  document.getElementById('pcCAddBox').style.display = add ? '' : 'none';
+  document.getElementById('pcCAddUBox').style.display = add ? '' : 'none';
+  var e = document.getElementById('pcCExp'); e.disabled = ne; if (ne) e.value = '';
+}
+function pcCAdd(){
+  if (PC.cart.length >= 10){ pcMsg('err', 'Up to 10 items per submit — Submit these first.'); return; }
+  var loc = document.getElementById('pcCLoc').value.trim().toUpperCase();
+  var add = document.getElementById('pcCToAdd').checked, ne = document.getElementById('pcCNoExp').checked;
+  var code = document.getElementById('pcCCode').value.trim().toUpperCase(), it = pcDesc(code);
+  var r = { location: loc, to_add: add, item_code: add ? '' : code, description: add ? document.getElementById('pcCAddD').value.trim().toUpperCase() : (it ? it.description : ''),
+            add_description: add ? document.getElementById('pcCAddD').value.trim() : '', add_unit: add ? document.getElementById('pcCAddU').value.trim() : '',
+            unit: add ? document.getElementById('pcCAddU').value.trim().toUpperCase() : (it ? it.unit : ''),
+            expiry_date: ne ? '' : document.getElementById('pcCExp').value, no_expiry: ne, qty: document.getElementById('pcCQty').value, remarks: document.getElementById('pcCRem').value.trim() };
+  var err = !loc ? 'Pick the location.' : (AP_LISTS && !AP_LISTS.loc.some(function(l){ return l.location === loc; })) ? 'Location "' + loc + '" is not in the Locations list.' :
+    (!add && !it) ? 'Pick an item code from the list (or tick "For add code").' : (add && (!r.add_description || !r.add_unit)) ? 'For add code: type the description and the unit.' :
+    (!ne && !r.expiry_date) ? 'Type the expiry date (or tick "No expiry").' : !(Number(r.qty) > 0) ? 'Type the counted quantity.' : '';
+  if (err){ pcMsg('err', err); return; }
+  pcMsg(''); PC.cart.push(r);
+  ['pcCCode','pcCAddD','pcCAddU','pcCQty','pcCRem'].forEach(function(id){ document.getElementById(id).value = ''; });
+  document.getElementById('pcCExp').value = ''; document.getElementById('pcCDesc').textContent = '';
+  pcCCart(); document.getElementById(add ? 'pcCAddD' : 'pcCCode').focus();
+}
+function pcCCart(){
+  var el = document.getElementById('pcCCart'); if (!el) return;
+  el.innerHTML = PC.cart.length ? '<table class="ap-tbl" style="margin-bottom:8px"><tr><th>#</th><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>Remarks</th><th></th></tr>' +
+    PC.cart.map(function(r, i){ return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.location) + '</td><td>' + (r.to_add ? '<span class="ap-tag warn">TO ADD</span>' : esc(r.item_code)) + '</td><td>' + esc(r.description) + '</td><td>' + esc(r.unit || '') + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td><td style="text-align:right">' + pcN(r.qty) + '</td><td>' + esc(r.remarks) + '</td><td><button class="ap-btn sm red" onclick="PC.cart.splice(' + i + ',1);pcCCart()">✕</button></td></tr>'; }).join('') +
+    '</table><div class="ap-actions" style="margin-top:4px"><button class="ap-btn green" onclick="pcCSubmit()">✔ Submit ' + PC.cart.length + ' item(s)</button><span class="ap-note">' + PC.cart.length + ' / 10</span></div>'
+    : '<div class="ap-note" style="margin-bottom:10px">No item added yet.</div>';
+}
+function pcCSubmit(){
+  if (!PC.cart.length) return;
+  var day = +document.getElementById('pcCDay').value;
+  var rows = PC.cart.map(function(r){ return { location: r.location, item_code: r.item_code, to_add: r.to_add, add_description: r.add_description, add_unit: r.add_unit,
+                                              expiry_date: r.expiry_date, no_expiry: r.no_expiry, qty: r.qty, remarks: r.remarks }; });
+  pcDo('rpci_count_add', { p_period: PC.per.id, p_day: day, p_rows: rows }, function(d){ return d.rows + ' count row(s) saved (Day ' + day + ').'; },
+    async function(){ PC.cart = []; pcCCart(); await pcLoadCounts(true); pcCList(); if (pcIsApv()) pcToAddPanel(); });
+}
+function pcCList(){
+  var rows = PC.counts || [], fd = document.getElementById('pcCFDay').value, locSel = document.getElementById('pcCFLoc'), fl = locSel.value, q = document.getElementById('pcCFQ').value.trim().toLowerCase();
+  var locs = []; rows.forEach(function(r){ if (locs.indexOf(r.location) === -1) locs.push(r.location); }); locs.sort();
+  locSel.innerHTML = '<option value="">All locations (' + locs.length + ')</option>' + apOpt(locs, fl);
+  var f = rows.filter(function(r){
+    var it = r.item_code ? pcDesc(r.item_code) : null;
+    return (!fd || String(r.day_no) === fd) && (!fl || r.location === fl) &&
+      (!q || [r.item_code, r.add_description, it && it.description, r.remarks, r.encoded_by].join(' ').toLowerCase().indexOf(q) !== -1);
+  });
+  var canDel = pcOpen() && pcCanEnc();
+  document.getElementById('pcCList').innerHTML = f.length ? '<div class="ap-note" style="margin-bottom:6px">' + f.length + ' row(s)</div><div class="ap-scroll"><table class="ap-tbl"><tr><th>Day</th><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>Remarks</th><th>By</th><th></th></tr>' +
+    f.map(function(r){
+      var it = r.item_code ? pcDesc(r.item_code) : null;
+      var mine = pcIsApv() || r.encoded_by === ME.username;
+      return '<tr><td>' + r.day_no + '</td><td>' + esc(r.location) + '</td><td>' + (r.item_code ? esc(r.item_code) : '<span class="ap-tag warn">TO ADD</span>') + '</td>' +
+        '<td>' + esc(it ? it.description : (r.add_description || '')) + (r.to_add && r.item_code ? ' <span class="ap-ro">(added as ' + esc(r.add_description || '') + ')</span>' : '') + '</td>' +
+        '<td>' + esc(it ? (it.unit || '') : (r.add_unit || '')) + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td>' +
+        '<td style="text-align:right">' + pcN(r.qty) + '</td><td>' + esc(r.remarks || '') + '</td><td class="ap-ro">' + esc(r.encoded_by || '') + '</td>' +
+        '<td>' + (canDel && mine ? '<button class="ap-btn sm red" onclick="pcCDel(' + r.id + ')">🗑</button>' : '') + '</td></tr>';
+    }).join('') + '</table></div>' : '<div class="ap-empty">Nothing counted yet.</div>';
+}
+function pcCDel(id){
+  if (!confirm('Delete this count row?')) return;
+  pcDo('rpci_count_delete', { p_id: id }, function(){ return 'Count row deleted.'; }, async function(){ await pcLoadCounts(true); pcCList(); if (pcIsApv()) pcToAddPanel(); });
+}
+function pcToAddPanel(){
+  var el = document.getElementById('pcToAdd'); if (!el) return;
+  var rows = (PC.counts || []).filter(function(r){ return !r.item_code; });
+  el.innerHTML = '<div class="ap-h">TO ADD — give the code (Approver)</div>' + (rows.length ?
+    '<div class="ap-hint">Make the item code first in Approvals → Master Lists → Item Codes if it is new. Tick the rows that get the same code.</div>' +
+    '<table class="ap-tbl"><tr><th></th><th>Day</th><th>Location</th><th>Description (typed)</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>By</th></tr>' +
+    rows.map(function(r){ return '<tr><td><input type="checkbox" class="pcTaChk" value="' + r.id + '"/></td><td>' + r.day_no + '</td><td>' + esc(r.location) + '</td><td>' + esc(r.add_description || '') + '</td><td>' + esc(r.add_unit || '') + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td><td style="text-align:right">' + pcN(r.qty) + '</td><td class="ap-ro">' + esc(r.encoded_by || '') + '</td></tr>'; }).join('') +
+    '</table><div class="ap-actions"><div class="ap-f" style="min-width:240px"><label>Item code</label><input type="text" id="pcTaCode" list="pcCItemList"/></div>' +
+    '<button class="ap-btn green" onclick="pcTaAssign()" style="align-self:flex-end">✔ Give this code to the ticked rows</button></div>'
+    : '<div class="ap-note" style="margin-bottom:10px">No "For add code" rows waiting.</div>');
+}
+function pcTaAssign(){
+  var ids = Array.prototype.map.call(document.querySelectorAll('.pcTaChk:checked'), function(c){ return +c.value; });
+  var code = document.getElementById('pcTaCode').value.trim().toUpperCase();
+  if (!ids.length || !code){ pcMsg('err', 'Tick the rows and type the item code.'); return; }
+  pcDo('rpci_assign_code', { p_ids: ids, p_code: code }, function(d){ return d.rows + ' row(s) now ' + esc(code) + '.'; }, async function(){ await pcLoadCounts(true); pcCList(); pcToAddPanel(); });
+}
+
+// ── 4 Reconcile ──────────────────────────────────────────────────────────────────
+async function pcRecon(){
+  try { var r = await sb.rpc('rpci_recon_rows', { p_period: PC.per.id }); if (r.error) throw r.error; PC.recon = r.data || []; }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var locs = []; PC.recon.forEach(function(x){ var l = pcLocName(x.location); if (locs.indexOf(l) === -1) locs.push(l); }); locs.sort();
+  var cnt = PC.recon.filter(function(x){ return x.counted && Number(x.variance) !== 0; }), nc = PC.recon.filter(function(x){ return !x.counted; });
+  var unm = cnt.filter(function(x){ return ['ADJUST','OK'].indexOf(x.action || '') === -1; }).length;
+  var h = '<div class="ap-hint">Count vs the system now (a RIS or PO made after the count changes the system, so the variance goes down). Mark each variance: <b>NEEDS RIS</b> / <b>NEEDS PO</b> (make it, then it is fixed) or <b>ADJUST</b> (posted in step 7). Not-counted locations are not changed.</div>' +
+    '<div style="margin:-6px 0 12px;display:flex;gap:6px;flex-wrap:wrap"><span class="ap-tag">' + cnt.length + ' variance(s)</span><span class="ap-tag ' + (unm ? 'warn' : 'ok') + '">' + unm + ' not ready to post</span>' + (nc.length ? '<span class="ap-tag warn">' + nc.length + ' row(s) in locations not counted</span>' : '') + '</div>' +
+    '<div class="rp-filters"><div class="ap-f"><label>Show</label><select id="pcRShow" onchange="pcRTable()"><option value="var">Variances only</option><option value="all">All rows</option><option value="nc">Not counted</option></select></div>' +
+    '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcRLoc" onchange="pcRTable()"><option value="">All locations</option>' + apOpt(locs) + '</select></div>' +
+    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcRQ" oninput="pcRTable()"/></div>' +
+    '<button class="ap-btn gray" onclick="pcRExcel()">⬇ Excel</button></div><div id="pcROut"></div>';
+  document.getElementById('pcBody').innerHTML = h; pcRTable();
+}
+function pcRRows(){
+  var s = document.getElementById('pcRShow').value, L = document.getElementById('pcRLoc').value, q = document.getElementById('pcRQ').value.trim().toLowerCase();
+  return PC.recon.filter(function(x){
+    return (s === 'all' || (s === 'var' && x.counted && Number(x.variance) !== 0) || (s === 'nc' && !x.counted)) && (!L || pcLocName(x.location) === L) &&
+      (!q || [x.item_code, x.description, x.remarks].join(' ').toLowerCase().indexOf(q) !== -1);
+  });
+}
+function pcRTable(){
+  var rows = pcRRows(), ed = pcOpen() && pcIsMgr();
+  document.getElementById('pcROut').innerHTML = rows.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl" id="pcRTbl"><tr><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th>Adv.</th><th style="text-align:right">System (period start)</th><th style="text-align:right">System now</th><th style="text-align:right">Pre-count</th><th style="text-align:right">Count</th><th style="text-align:right">Variance</th><th style="text-align:right">Value</th><th>Mark</th><th>Remarks</th></tr>' +
+    rows.map(function(x){
+      var v = Number(x.variance), i = PC.recon.indexOf(x);
+      return '<tr><td>' + esc(pcLocName(x.location)) + '</td><td>' + esc(x.item_code) + '</td><td>' + esc(x.description || '') + '</td><td>' + esc(x.uom || '') + '</td><td>' + esc(x.expiry_date ? toMDY(x.expiry_date) : '') + '</td><td>' + (x.is_advance ? '✓' : '') + '</td>' +
+        '<td style="text-align:right">' + pcN(x.snapshot_qty) + '</td><td style="text-align:right">' + pcN(x.system_qty) + '</td><td style="text-align:right">' + pcN(x.precount) + '</td>' +
+        '<td style="text-align:right">' + (x.counted ? pcN(x.count_qty) : '<span class="ap-tag warn">not counted</span>') + '</td>' +
+        '<td style="text-align:right" class="' + (v < 0 ? 'rp-out' : v > 0 ? 'rp-in' : '') + '">' + (x.counted && v ? pcN(v) : '') + '</td>' +
+        '<td style="text-align:right">' + (x.counted && v ? pcP(v * Number(x.unit_cost || 0)) : '') + '</td>' +
+        '<td>' + (ed ? '<select data-i="' + i + '" class="pcRMark"><option value=""></option>' + apOpt(PC_MARKS, x.action || '') + '</select>' : esc(x.action || '')) + '</td>' +
+        '<td>' + (ed ? '<input type="text" data-i="' + i + '" class="pcRRem" value="' + esc(x.remarks || '') + '"/>' : esc(x.remarks || '')) + '</td></tr>';
+    }).join('') + '</table></div>' + (ed ? '<div class="ap-actions"><button class="ap-btn green" onclick="pcRSave()">💾 Save marks</button><button class="ap-btn gray" onclick="pcRAll(\'ADJUST\')">Mark all shown with no mark → ADJUST</button></div>' : '')
+    : '<div class="ap-empty">' + (document.getElementById('pcRShow').value === 'var' ? 'No variance — the count matches the system.' : 'No rows.') + '</div>';
+}
+function pcRAll(a){ document.querySelectorAll('#pcRTbl .pcRMark').forEach(function(s){ if (!s.value) s.value = a; }); }
+function pcRSave(){
+  var rows = [];
+  document.querySelectorAll('#pcRTbl .pcRMark').forEach(function(s){
+    var x = PC.recon[+s.dataset.i], rem = document.querySelector('#pcRTbl .pcRRem[data-i="' + s.dataset.i + '"]');
+    if ((s.value || '') !== (x.action || '') || (rem.value.trim() !== (x.remarks || '')))
+      rows.push({ location: x.location || '', item_code: x.item_code, expiry_date: x.expiry_date || '', action: s.value, remarks: rem.value });
+  });
+  if (!rows.length){ pcMsg('ok', 'Nothing changed.'); return; }
+  pcDo('rpci_recon_save', { p_period: PC.per.id, p_rows: rows }, function(d){ return d.rows + ' mark(s) saved.'; }, function(){ return pcRecon(); });
+}
+function pcRExcel(){
+  var aoa = [['Location','Code','Description','Unit','Expiry','Advance','System (period start)','System now','Pre-count','Count','Variance','Value','Mark','Remarks']];
+  pcRRows().forEach(function(x){ var v = x.counted ? Number(x.variance) : null;
+    aoa.push([pcLocName(x.location), x.item_code, x.description || '', x.uom || '', x.expiry_date || '', x.is_advance ? '✓' : '', Number(x.snapshot_qty), Number(x.system_qty),
+              x.precount == null ? '' : Number(x.precount), x.counted ? Number(x.count_qty) : 'not counted', v == null ? '' : v, v == null ? '' : Math.round(v * Number(x.unit_cost || 0) * 100) / 100, x.action || '', x.remarks || '']); });
+  var ws = xlsMdy(XLSX.utils.aoa_to_sheet(aoa)), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Reconcile');
+  XLSX.writeFile(wb, 'RPCI Reconcile ' + PC.per.unit + ' ' + PC.per.as_of + '.xlsx');
+}
+
+// ── 5 Accounting ───────────────────────────────────────────────────────────────────
+function pcFundSel(id, fn){ return '<div class="ap-f" style="min-width:240px"><label>Fund</label><select id="' + id + '" onchange="' + fn + '()">' + apOpt(PO_FUNDS, PC.fund || PO_FUNDS[0]) + '</select></div>'; }
+async function pcAcctg(){
+  var up = pcOpen() && ['Admin','Approver','Encoder'].indexOf(ME.role) !== -1;
+  var h = '<div class="rp-filters">' + pcFundSel('pcAFund', 'pcALoad') +
+    '<div class="ap-f"><label>Show</label><select id="pcAShow" onchange="pcATable()"><option value="diff">Differences only</option><option value="all">All items</option></select></div>' +
+    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcAQ" oninput="pcATable()"/></div>' +
+    '<button class="ap-btn gray" onclick="pcAExcel()">⬇ Excel</button></div>' +
+    '<div class="ap-hint">Count per fund = the count of each location / item / expiry shared by the funds of its batches (no system stock → Regular). Not-counted locations use the system qty.' +
+      (ME.role === 'Accounting' ? ' Write your remarks in the last column — it saves when you leave the box.' : '') + '</div>' +
+    (up ? '<details class="rp-cols" id="pcAUp"><summary>⬆ Upload the Accounting records of this fund (MMS)</summary><div style="padding:6px 12px 12px">' +
+      '<div class="ap-hint" style="margin:0 0 6px">Copy from Excel and paste here — columns in this order: <b>Item Code | Description | Unit | Qty | Unit Cost | Amount</b> (a header row is skipped). Uploading again replaces this fund\'s rows.</div>' +
+      '<textarea id="pcAPaste" style="width:100%;height:140px;font-family:monospace;font-size:.78rem;border:1.5px solid #d0d7e2;border-radius:7px;padding:8px"></textarea>' +
+      '<div class="ap-actions" style="margin-top:8px"><button class="ap-btn" onclick="pcAUpload()">⬆ Upload</button><span class="ap-note" id="pcAUpNote"></span></div></div></details>' : '') +
+    '<div id="pcAOut"></div>';
+  document.getElementById('pcBody').innerHTML = h; pcALoad();
+}
+async function pcALoad(){
+  PC.fund = document.getElementById('pcAFund').value;
+  document.getElementById('pcAOut').innerHTML = '<div class="ap-empty">Loading…</div>';
+  try { var r = await sb.rpc('rpci_acctg_compare', { p_period: PC.per.id, p_fund: PC.fund }); if (r.error) throw r.error; PC.acc = r.data || []; }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  pcATable();
+}
+function pcARows(){
+  var s = document.getElementById('pcAShow').value, q = document.getElementById('pcAQ').value.trim().toLowerCase();
+  return (PC.acc || []).filter(function(x){ return (s === 'all' || Math.abs(Number(x.diff_qty)) > 0.00001 || Math.abs(Number(x.diff_amount)) >= 0.01) &&
+    (!q || [x.item_code, x.description, x.remarks].join(' ').toLowerCase().indexOf(q) !== -1); });
+}
+function pcATable(){
+  var rows = pcARows(), canNote = ['Accounting','Approver','Admin'].indexOf(ME.role) !== -1;
+  var T = function(k){ return (PC.acc || []).reduce(function(a, x){ return a + Number(x[k] || 0); }, 0); };
+  document.getElementById('pcAOut').innerHTML = '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap"><span class="ap-tag">Count ₱' + pcP(T('count_amount')) + '</span><span class="ap-tag">Accounting ₱' + pcP(T('acctg_amount')) + '</span><span class="ap-tag ' + (Math.abs(T('diff_amount')) < 0.01 ? 'ok' : 'warn') + '">Difference ₱' + pcP(T('diff_amount')) + '</span><span class="ap-tag">' + (PC.acc || []).filter(function(x){ return x.in_acctg; }).length + ' accounting row(s)</span></div>' +
+    (rows.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl"><tr><th>Code</th><th>Description</th><th>Unit</th><th style="text-align:right">Unit value</th><th style="text-align:right">System</th><th style="text-align:right">Count</th><th style="text-align:right">Count amount</th><th style="text-align:right">Accounting qty</th><th style="text-align:right">Accounting amount</th><th style="text-align:right">Diff qty</th><th style="text-align:right">Diff amount</th><th style="min-width:220px">Accounting remarks</th></tr>' +
+      rows.map(function(x){ var d = Number(x.diff_qty), i = PC.acc.indexOf(x);
+        return '<tr><td>' + esc(x.item_code.charAt(0) === '?' ? '—' : x.item_code) + (!x.in_system ? ' <span class="ap-tag warn">not in count</span>' : '') + (!x.in_acctg ? ' <span class="ap-tag warn">not in books</span>' : '') + '</td>' +
+          '<td>' + esc(x.description || '') + '</td><td>' + esc(x.uom || '') + '</td><td style="text-align:right">' + pcP(x.unit_cost) + '</td>' +
+          '<td style="text-align:right">' + pcN(x.system_qty) + '</td><td style="text-align:right">' + pcN(x.count_qty) + '</td><td style="text-align:right">' + pcP(x.count_amount) + '</td>' +
+          '<td style="text-align:right">' + pcN(x.acctg_qty) + '</td><td style="text-align:right">' + pcP(x.acctg_amount) + '</td>' +
+          '<td style="text-align:right" class="' + (d < 0 ? 'rp-out' : d > 0 ? 'rp-in' : '') + '">' + (d ? pcN(d) : '') + '</td><td style="text-align:right">' + (Math.abs(Number(x.diff_amount)) >= 0.01 ? pcP(x.diff_amount) : '') + '</td>' +
+          '<td>' + (canNote ? '<input type="text" value="' + esc(x.remarks || '') + '" onchange="pcANote(' + i + ',this.value)"/>' : esc(x.remarks || '')) + (x.remarks_by ? '<div class="ap-ro">' + esc(x.remarks_by) + '</div>' : '') + '</td></tr>';
+      }).join('') + '</table></div>' : '<div class="ap-empty">' + ((PC.acc || []).some(function(x){ return x.in_acctg; }) ? 'No difference.' : 'No accounting records uploaded for this fund yet.') + '</div>');
+}
+async function pcANote(i, v){
+  var x = PC.acc[i];
+  try { await pcRpc('rpci_acctg_note', { p_period: PC.per.id, p_fund: PC.fund, p_item: x.item_code, p_remarks: v }); x.remarks = v; x.remarks_by = ME.username; pcMsg('ok', '✅ Remark saved — ' + esc(x.description || x.item_code)); }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); }
+}
+function pcAUpload(){
+  var lines = document.getElementById('pcAPaste').value.split(/\r?\n/).filter(function(l){ return l.trim(); });
+  var rows = [];
+  lines.forEach(function(l){
+    var c = l.split('\t'); if (c.length < 4) c = l.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    c = c.map(function(s){ return String(s || '').replace(/^"|"$/g, '').trim(); });
+    var qty = c[3] ? c[3].replace(/[,₱\s]/g, '') : '';
+    if (!c[0] && !c[1]) return;
+    if (qty === '' || isNaN(Number(qty))) return;                   // header / total line
+    rows.push({ item_code: c[0], description: c[1], uom: c[2], qty: qty, unit_cost: (c[4] || '').replace(/[,₱\s]/g, ''), amount: (c[5] || '').replace(/[,₱\s]/g, '') });
+  });
+  if (!rows.length){ pcMsg('err', 'No rows found — paste the columns Item Code | Description | Unit | Qty | Unit Cost | Amount.'); return; }
+  var f = document.getElementById('pcAFund').value;
+  if (!confirm('Upload ' + rows.length + ' row(s) as the Accounting records of ' + f + '? This replaces the rows uploaded before for this fund.')) return;
+  pcDo('rpci_acctg_upload', { p_period: PC.per.id, p_fund: f, p_rows: rows }, function(d){ return d.rows + ' accounting row(s) uploaded for ' + esc(f) + '.'; },
+    function(){ document.getElementById('pcAPaste').value = ''; return pcALoad(); });
+}
+function pcAExcel(){
+  var aoa = [['Code','Description','Unit','Unit value','System','Count','Count amount','Accounting qty','Accounting amount','Diff qty','Diff amount','Accounting remarks']];
+  pcARows().forEach(function(x){ aoa.push([x.item_code, x.description || '', x.uom || '', Number(x.unit_cost), Number(x.system_qty), Number(x.count_qty), Number(x.count_amount), Number(x.acctg_qty), Number(x.acctg_amount), Number(x.diff_qty), Number(x.diff_amount), x.remarks || '']); });
+  var ws = XLSX.utils.aoa_to_sheet(aoa), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Accounting');
+  XLSX.writeFile(wb, 'RPCI Accounting ' + PC.per.unit + ' ' + PC.fund + '.xlsx');
+}
+
+// ── 6 RPCI ─────────────────────────────────────────────────────────────────────────
+async function pcLoadSig(){
+  var r = await sb.from('app_settings').select('key,value').like('key', 'rpci%'); if (r.error) throw r.error;
+  PC.sig = {}; (r.data || []).forEach(function(x){ PC.sig[x.key] = x.value || ''; });
+}
+async function pcRpci(){
+  try { await pcLoadSig(); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); }
+  var h = '<div class="rp-filters">' + pcFundSel('pcPFund', 'pcPLoad') + '<button class="ap-btn" onclick="pcPrintRpci()">🖨 Print RPCI</button></div>' +
+    (pcIsMgr() ? '<details class="rp-cols"><summary>✎ RPCI signatories</summary><div style="padding:6px 12px 12px"><div class="ap-grid">' +
+      PC_SIG_KEYS.map(function(k){ return apField(k[1], 'pcS_' + k[0], PC.sig[k[0]] || ''); }).join('') +
+      '</div><button class="ap-btn green" onclick="pcSigSave()">💾 Save signatories</button></div></details>' : '') +
+    '<div id="pcPOut"></div>';
+  document.getElementById('pcBody').innerHTML = h; pcPLoad();
+}
+function pcSigSave(){
+  var p = {}; PC_SIG_KEYS.forEach(function(k){ p[k[0]] = document.getElementById('pcS_' + k[0]).value; });
+  pcDo('rpci_save_settings', { p: p }, function(){ return 'RPCI signatories saved.'; }, function(){ return pcLoadSig(); });
+}
+async function pcPLoad(){
+  PC.fund = document.getElementById('pcPFund').value;
+  document.getElementById('pcPOut').innerHTML = '<div class="ap-empty">Loading…</div>';
+  try { var r = await sb.rpc('rpci_report', { p_period: PC.per.id, p_fund: PC.fund }); if (r.error) throw r.error; PC.rep = r.data || []; }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var tv = PC.rep.reduce(function(a, x){ return a + Number(x.diff_value || 0); }, 0);
+  document.getElementById('pcPOut').innerHTML = (PC.per.status !== 'POSTED' ? '<div class="ap-hint">Not posted yet — Balance per Card is the system now; it stays fixed once posted (step 7).</div>' : '') +
+    '<div style="margin:0 0 10px"><span class="ap-tag">' + PC.rep.length + ' item(s)</span> <span class="ap-tag ' + (Math.abs(tv) < 0.01 ? 'ok' : 'warn') + '">Shortage/Overage ₱' + pcP(tv) + '</span></div>' +
+    (PC.rep.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl"><tr><th>Article</th><th>Description</th><th>Stock No.</th><th>Unit</th><th style="text-align:right">Unit value</th><th style="text-align:right">Balance per card</th><th style="text-align:right">On hand per count</th><th style="text-align:right">Short/Over qty</th><th style="text-align:right">Short/Over value</th><th>Remarks</th></tr>' +
+      PC.rep.map(function(x){ var d = Number(x.diff_qty);
+        return '<tr><td>' + esc(x.article || '') + '</td><td>' + esc(x.description || '') + '</td><td>' + esc(x.item_code) + '</td><td>' + esc(x.uom || '') + '</td><td style="text-align:right">' + pcP(x.unit_value) + '</td>' +
+          '<td style="text-align:right">' + pcN(x.card_qty) + '</td><td style="text-align:right">' + pcN(x.count_qty) + '</td><td style="text-align:right" class="' + (d < 0 ? 'rp-out' : d > 0 ? 'rp-in' : '') + '">' + (d ? pcN(d) : '') + '</td>' +
+          '<td style="text-align:right">' + (d ? pcP(x.diff_value) : '') + '</td><td>' + esc(x.remarks || '') + '</td></tr>'; }).join('') + '</table></div>'
+      : '<div class="ap-empty">No stock of this fund.</div>');
+}
+function pcPrintRpci(){
+  if (!PC.rep){ return; }
+  var S = function(k){ return esc(PC.sig[k] || ''); }, p = PC.per;
+  var w = window.open('', '_blank'); if (!w){ pcMsg('err', 'Please allow pop-ups for this site to print.'); return; }
+  var sigBox = function(name, pos, cap){ return '<td style="width:33%;vertical-align:top;padding:4px 10px"><div>' + cap + '</div><div style="height:34px"></div><div style="text-align:center;font-weight:700;border-bottom:1px solid #000">' + (name || '&nbsp;') + '</div><div style="text-align:center;font-size:9.5px">' + (pos || '&nbsp;') + '</div></td>'; };
+  var cc = [1,2,3].filter(function(n){ return PC.sig['rpci_cc' + n + '_name']; }).map(function(n){ return '<div style="text-align:center;font-weight:700;border-bottom:1px solid #000;margin-top:22px">' + S('rpci_cc' + n + '_name') + '</div><div style="text-align:center;font-size:9.5px">' + S('rpci_cc' + n + '_pos') + '</div>'; }).join('');
+  if (!cc) cc = '<div style="height:34px"></div><div style="border-bottom:1px solid #000">&nbsp;</div><div style="text-align:center;font-size:9.5px">Signature over Printed Name of Inventory Committee Chair and Members</div>';
+  var tot = PC.rep.reduce(function(a, x){ return a + Number(x.diff_value || 0); }, 0);
+  var body = PC.rep.map(function(x){ var d = Number(x.diff_qty);
+    return '<tr><td>' + esc(x.article || '') + '</td><td>' + esc(x.description || '') + '</td><td class="ct">' + esc(x.item_code) + '</td><td class="ct">' + esc(x.uom || '') + '</td><td class="n">' + pcP(x.unit_value) + '</td>' +
+      '<td class="n">' + pcN(x.card_qty) + '</td><td class="n">' + pcN(x.count_qty) + '</td><td class="n">' + (d ? pcN(d) : '') + '</td><td class="n">' + (d ? pcP(x.diff_value) : '') + '</td><td>' + esc(x.remarks || '') + '</td></tr>'; }).join('');
+  var html = '<div style="text-align:right;font-style:italic;font-size:10px">Appendix 66</div>' +
+    '<div style="text-align:center;font-weight:700;font-size:14px;margin-top:4px">REPORT ON THE PHYSICAL COUNT OF INVENTORIES</div>' +
+    '<div style="text-align:center;margin-top:4px"><u>&nbsp;' + [S('rpci_inv_type'), esc(p.unit)].filter(Boolean).join(' — ') + '&nbsp;</u></div><div style="text-align:center;font-size:9.5px">(Type of Inventory Item)</div>' +
+    '<div style="text-align:center;margin-top:4px">As at <u>&nbsp;' + esc(toMDY(p.as_of)) + '&nbsp;</u></div>' +
+    '<div style="margin-top:10px">Fund Cluster: <u>&nbsp;' + esc(PC.fund) + '&nbsp;</u></div>' +
+    '<div style="margin:8px 0 8px">For which <u>&nbsp;' + (S('rpci_off_name') || '_______________') + '&nbsp;</u>, <u>&nbsp;' + (S('rpci_off_pos') || '_______________') + '&nbsp;</u>, <u>&nbsp;' + (S('rpci_entity') || '_______________') + '&nbsp;</u> is accountable, having assumed such accountability on <u>&nbsp;' + (S('rpci_off_date') || '_______________') + '&nbsp;</u>.' +
+      '<div style="display:flex;font-size:9px;font-style:italic;gap:40px;margin-left:60px">(Name of Accountable Officer) (Official Designation) (Entity Name) (Date of Assumption)</div></div>' +
+    '<table class="g"><thead><tr><th rowspan="2" style="width:9%">Article</th><th rowspan="2">Description</th><th rowspan="2" style="width:8%">Stock Number</th><th rowspan="2" style="width:6%">Unit of Measure</th><th rowspan="2" style="width:8%">Unit Value</th>' +
+      '<th style="width:8%">Balance Per Card</th><th style="width:8%">On Hand Per Count</th><th colspan="2">Shortage/Overage</th><th rowspan="2" style="width:14%">Remarks</th></tr>' +
+      '<tr><th>(Quantity)</th><th>(Quantity)</th><th style="width:6%">Quantity</th><th style="width:8%">Value</th></tr></thead><tbody>' + body +
+      '<tr><td colspan="8" style="text-align:right;font-weight:700">TOTAL</td><td class="n" style="font-weight:700">' + pcP(tot) + '</td><td></td></tr></tbody></table>' +
+    '<table style="width:100%;margin-top:14px;border-collapse:collapse;page-break-inside:avoid"><tr>' +
+      '<td style="width:34%;vertical-align:top;padding:4px 10px"><div>Certified Correct by:</div>' + cc + '</td>' +
+      sigBox(S('rpci_app_name'), S('rpci_app_pos') || 'Signature over Printed Name of Head of Agency/Entity or Authorized Representative', 'Approved by:') +
+      sigBox(S('rpci_ver_name'), S('rpci_ver_pos') || 'Signature over Printed Name of COA Representative', 'Verified by:') + '</tr></table>';
+  var css = '@page{size:13in 8.5in;margin:.4in}body{font-family:Arial,Helvetica,sans-serif;font-size:10.5px;color:#000;margin:0}' +
+    'table.g{width:100%;border-collapse:collapse}table.g thead{display:table-header-group}table.g th,table.g td{border:1px solid #000;padding:3px 4px}table.g th{font-size:9.5px}' +
+    '.n{text-align:right}.ct{text-align:center}tr{page-break-inside:avoid}';
+  w.document.open();
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>RPCI ' + esc(p.unit) + ' ' + esc(PC.fund) + '</title><style>' + css + '</style></head><body>' + html + '</body></html>');
+  w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+}
+
+// ── 7 Post / beginning balance ───────────────────────────────────────────────────
+function pcBegLabel(){ var a = String(PC.per.as_of); return a.slice(5) === '12-31' ? 'Beginning balance ' + (+a.slice(0, 4) + 1) : 'Balance after ' + toMDY(a); }
+async function pcPost(){
+  var p = PC.per, h = '';
+  if (p.status === 'OPEN'){
+    var counts, recon;
+    try { counts = await pcLoadCounts(true); var r = await sb.rpc('rpci_recon_rows', { p_period: p.id }); if (r.error) throw r.error; recon = PC.recon = r.data || []; }
+    catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+    var toAdd = counts.filter(function(c){ return !c.item_code; }).length;
+    var vars = recon.filter(function(x){ return x.counted && Number(x.variance) !== 0; });
+    var notReady = vars.filter(function(x){ return ['ADJUST','OK'].indexOf(x.action || '') === -1; }).length;
+    var nc = []; recon.forEach(function(x){ if (!x.counted){ var l = pcLocName(x.location); if (nc.indexOf(l) === -1) nc.push(l); } });
+    var ok = counts.length && !toAdd && !notReady;
+    var li = function(good, t){ return '<li style="margin:5px 0">' + (good ? '✅ ' : '⛔ ') + t + '</li>'; };
+    h = '<div class="ap-h">Before posting</div><ul style="list-style:none;padding:0;font-size:.86rem">' +
+      li(counts.length > 0, counts.length + ' count row(s) encoded') +
+      li(!toAdd, toAdd ? toAdd + ' "For add code" row(s) still need a code (step 3, TO ADD)' : 'every counted row has an item code') +
+      li(!notReady, notReady ? notReady + ' variance(s) not marked ADJUST yet, or still waiting for the RIS / PO (step 4)' : vars.length + ' variance(s) ready') +
+      (nc.length ? '<li style="margin:5px 0">⚠️ Not counted (will not be changed): ' + esc(nc.join(', ')) + '</li>' : '') + '</ul>' +
+      '<div class="ap-hint">Posting makes the stock of every counted location / item / expiry equal to the count, per fund: shortages are taken out of the batches (newest first), overages become new batches — all with reference <b>RPCI ' + esc(toMDY(p.as_of)) + '</b> on the stock card, dated ' + esc(toMDY(p.as_of < TODAY_STR ? p.as_of : TODAY_STR)) + '. The RPCI figures are kept as they were. This cannot be undone.</div>' +
+      (pcIsApv() ? '<div class="ap-actions"><button class="ap-btn green" ' + (ok ? '' : 'disabled') + ' onclick="pcDoPost()">✔ Post — the stock becomes the count (' + esc(pcBegLabel()) + ')</button></div>' : '<div class="ap-note">Only the Approver posts.</div>');
+    document.getElementById('pcBody').innerHTML = h; return;
+  }
+  var rows;
+  try { rows = await fetchAll(function(){ return sb.from('rpci_posted').select('*').eq('period_id', p.id).order('location').order('item_code'); }); }
+  catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  PC.beg = rows.map(function(x){ var it = pcDesc(x.item_code) || {}; return { location: x.location, item_code: x.item_code, description: it.description || '', uom: it.unit || '', expiry_date: x.expiry_date, fund: x.fund,
+    qty: x.counted ? Number(x.count_qty) : Number(x.system_qty), unit_cost: Number(x.unit_cost || 0), counted: x.counted }; }).filter(function(x){ return x.qty > 0; });
+  var tq = PC.beg.reduce(function(a, x){ return a + x.qty * x.unit_cost; }, 0);
+  document.getElementById('pcBody').innerHTML = '<div class="ap-msg ok" style="display:block">✅ Posted ' + esc(toMDYTime(p.posted_at)) + ' by ' + esc(p.posted_by || '') + '. The stock card now carries the count — this is the <b>' + esc(pcBegLabel()) + '</b>.</div>' +
+    '<div class="rp-filters"><div class="ap-f" style="min-width:240px"><label>Fund</label><select id="pcBFund" onchange="pcBTable()"><option value="">All funds</option>' + apOpt(PO_FUNDS) + '</select></div>' +
+    '<button class="ap-btn gray" onclick="pcBExcel()">⬇ Excel</button></div><div style="margin:0 0 10px"><span class="ap-tag">' + PC.beg.length + ' row(s)</span> <span class="ap-tag">₱' + pcP(tq) + '</span></div><div id="pcBOut"></div>';
+  pcBTable();
+}
+function pcBRows(){ var f = document.getElementById('pcBFund').value; return PC.beg.filter(function(x){ return !f || x.fund === f; }); }
+function pcBTable(){
+  var rows = pcBRows();
+  document.getElementById('pcBOut').innerHTML = rows.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl"><tr><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th>Fund</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit value</th><th style="text-align:right">Amount</th></tr>' +
+    rows.map(function(x){ return '<tr><td>' + esc(pcLocName(x.location)) + (x.counted ? '' : ' <span class="ap-tag warn">not counted</span>') + '</td><td>' + esc(x.item_code) + '</td><td>' + esc(x.description) + '</td><td>' + esc(x.uom) + '</td><td>' + esc(x.expiry_date ? toMDY(x.expiry_date) : '') + '</td><td>' + esc(x.fund) + '</td><td style="text-align:right">' + pcN(x.qty) + '</td><td style="text-align:right">' + pcP(x.unit_cost) + '</td><td style="text-align:right">' + pcP(x.qty * x.unit_cost) + '</td></tr>'; }).join('') +
+    '</table></div>' : '<div class="ap-empty">No rows.</div>';
+}
+function pcBExcel(){
+  var aoa = [['Location','Code','Description','Unit','Expiry','Fund','Qty','Unit value','Amount','Counted']];
+  pcBRows().forEach(function(x){ aoa.push([pcLocName(x.location), x.item_code, x.description, x.uom, x.expiry_date || '', x.fund, x.qty, x.unit_cost, Math.round(x.qty * x.unit_cost * 100) / 100, x.counted ? 'YES' : 'NOT COUNTED']); });
+  var ws = xlsMdy(XLSX.utils.aoa_to_sheet(aoa)), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Beginning Balance');
+  XLSX.writeFile(wb, pcBegLabel() + ' ' + PC.per.unit + '.xlsx');
+}
+function pcDoPost(){
+  if (!confirm('POST this physical count?\n\nThe stock of every counted location / item / expiry becomes the count (shortage / overage on the stock card, reference RPCI). This cannot be undone.')) return;
+  pcDo('rpci_post', { p_period: PC.per.id }, function(d){ return 'Posted: ' + d.shortage + ' shortage row(s), ' + d.overage + ' overage batch(es).'; }, function(){ return pcLoadPeriods(PC.per.id); });
 }
 
 function soon(){ showMsg('ok', 'This page is being moved to the new system next — for now please use the old app for it.'); }
