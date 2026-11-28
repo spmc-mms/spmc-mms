@@ -1852,7 +1852,7 @@ async function pcLoadPeriods(keep){
     var us = myUnits();
     PC.periods = (r.data || []).filter(function(p){ return ME.role === 'Accounting' || !us || us.indexOf(p.unit) !== -1; });
   } catch(e){ pcMsg('err', '❌ ' + esc(errText(e)) + ' — was update 97 run in Supabase?'); PC.periods = []; }
-  var sel = document.getElementById('pcPer'), cur = keep || (PC.per && PC.per.id);
+  var sel = document.getElementById('pcPer'), cur = keep || PC.wantPer || (PC.per && PC.per.id); PC.wantPer = null;
   sel.innerHTML = PC.periods.length ? PC.periods.map(function(p){
       return '<option value="' + p.id + '">' + esc(pcSemName(p)) + ' — ' + esc(p.unit) + (p.status === 'POSTED' ? ' (POSTED)' : '') + '</option>';
     }).join('') : '<option value="">— no count yet —</option>';
@@ -2283,13 +2283,61 @@ async function pcCount(){
       '<button class="ap-btn" onclick="pcCAdd()" style="margin-bottom:2px">+ Add</button></div>' +
       '<div id="pcCCart"></div>';
   }
+  if (!ro) h += '<div id="pcCMine"></div>';
   if (pcIsApv()) h += '<div id="pcToAdd"></div>';
-  h += '<div class="ap-h">Counted</div><div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
+  h += '<details class="rp-cols" id="pcCAllDet" style="margin-top:14px"' + (PC.allOpen ? ' open' : '') + ' ontoggle="PC.allOpen=this.open"><summary id="pcCAllSum">📋 Counted — all encoders, per location (click to show)</summary><div style="padding:6px 12px 12px">' +
+    '<div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
     '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
-    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()"/></div></div><div id="pcCList"></div>';
+    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()"/></div></div><div id="pcCList"></div></div></details>' +
+    '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
   document.getElementById('pcBody').innerHTML = h;
   if (!ro){ document.getElementById('pcCDay').value = dSel; pcCCart(); }
-  pcCList(); if (pcIsApv()) pcToAddPanel();
+  pcCLists(); if (pcIsApv()) pcToAddPanel();
+}
+function pcCLists(){ pcCMine(); pcCList(); }
+function pcCanEditRow(r){ return pcOpen() && pcCanEnc() && (r.encoded_by === ME.username || ME.role === 'Approver' || ME.role === 'Admin'); }
+// one count row — or its edit form when it is the one being edited
+function pcCRowHtml(r, withBy){
+  var it = r.item_code ? pcDesc(r.item_code) : null, ed = pcCanEditRow(r);
+  if (PC.editId === r.id){
+    var dOpts = [1,2,3,4].map(function(d){ return '<option value="' + d + '"' + (r.day_no == d ? ' selected' : '') + '>Day ' + d + '</option>'; }).join('');
+    return '<tr style="background:#fff8e6"><td><select id="pcE_day">' + dOpts + '</select></td>' +
+      '<td><input type="text" id="pcE_loc" list="pcCELocList" value="' + esc(r.location) + '" style="min-width:130px"/></td>' +
+      (r.item_code ? '<td colspan="2"><input type="text" id="pcE_code" list="pcCEItemList" value="' + esc(r.item_code) + '" style="min-width:200px"/></td><td>' + esc(it ? it.unit || '' : '') + '</td>'
+                   : '<td><span class="ap-tag warn">TO ADD</span></td><td><input type="text" id="pcE_addD" value="' + esc(r.add_description || '') + '"/></td><td><input type="text" id="pcE_addU" value="' + esc(r.add_unit || '') + '" style="width:70px"/></td>') +
+      '<td style="white-space:nowrap"><input type="date" id="pcE_exp" value="' + esc(r.expiry_date || '') + '"' + (r.no_expiry ? ' disabled' : '') + ' style="max-width:150px"/> <label style="font-size:.75rem"><input type="checkbox" id="pcE_noexp"' + (r.no_expiry ? ' checked' : '') + ' onchange="var e=document.getElementById(\'pcE_exp\');e.disabled=this.checked;if(this.checked)e.value=\'\'"/> No expiry</label></td>' +
+      '<td><input type="number" id="pcE_qty" min="0" step="any" value="' + esc(r.qty) + '" style="width:90px"/></td>' +
+      '<td><input type="text" id="pcE_rem" value="' + esc(r.remarks || '') + '"/></td>' + (withBy ? '<td class="ap-ro">' + esc(r.encoded_by || '') + '</td>' : '') +
+      '<td style="white-space:nowrap"><button class="ap-btn sm green" onclick="pcCEditSave(' + r.id + ')">💾</button> <button class="ap-btn sm gray" onclick="PC.editId=null;pcCLists()">✕</button></td></tr>';
+  }
+  return '<tr><td>' + r.day_no + '</td><td>' + esc(r.location) + '</td><td>' + (r.item_code ? esc(r.item_code) : '<span class="ap-tag warn">TO ADD</span>') + '</td>' +
+    '<td>' + esc(it ? it.description : (r.add_description || '')) + (r.to_add && r.item_code ? ' <span class="ap-ro">(added as ' + esc(r.add_description || '') + ')</span>' : '') + '</td>' +
+    '<td>' + esc(it ? (it.unit || '') : (r.add_unit || '')) + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td>' +
+    '<td style="text-align:right">' + pcN(r.qty) + '</td><td>' + esc(r.remarks || '') + '</td>' + (withBy ? '<td class="ap-ro">' + esc(r.encoded_by || '') + '</td>' : '') +
+    '<td style="white-space:nowrap">' + (ed ? '<button class="ap-btn sm" title="Edit" onclick="PC.editId=' + r.id + ';pcCLists()">✎</button> <button class="ap-btn sm red" title="Delete" onclick="pcCDel(' + r.id + ')">🗑</button>' : '') + '</td></tr>';
+}
+var PC_CHEAD = function(withBy){ return '<tr><th>Day</th><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>Remarks</th>' + (withBy ? '<th>By</th>' : '') + '<th></th></tr>'; };
+// what this user submitted — newest batch first, so a mistake can be found and changed
+function pcCMine(){
+  var el = document.getElementById('pcCMine'); if (!el) return;
+  var mine = (PC.counts || []).filter(function(r){ return r.encoded_by === ME.username; });
+  if (!mine.length){ el.innerHTML = ''; return; }
+  var batches = []; mine.forEach(function(r){ var b = batches.find(function(x){ return x.b === r.batch_no; }); if (!b){ b = { b: r.batch_no, at: r.created_at, rows: [] }; batches.push(b); } b.rows.push(r); });
+  var show = PC.mineAll ? batches : batches.slice(0, 3);
+  el.innerHTML = '<details class="rp-cols" open style="margin-top:10px"><summary>✔ What you submitted — ' + mine.length + ' row(s) in ' + batches.length + ' submit(s) · ✎ to change (the Approver is told in To Do)</summary><div style="padding:6px 12px 12px">' +
+    show.map(function(b, k){ return '<div class="ap-note" style="margin:8px 0 4px">' + (k === 0 ? '<b>Last submit</b> · ' : '') + esc(toMDYTime(b.at)) + ' · ' + b.rows.length + ' row(s)</div>' +
+      '<div class="ap-scroll"><table class="ap-tbl">' + PC_CHEAD(false) + b.rows.map(function(r){ return pcCRowHtml(r, false); }).join('') + '</table></div>'; }).join('') +
+    (batches.length > 3 ? '<div class="ap-actions"><button class="ap-btn sm gray" onclick="PC.mineAll=!PC.mineAll;pcCMine()">' + (PC.mineAll ? 'Show the last 3 submits only' : 'Show all ' + batches.length + ' submits') + '</button></div>' : '') +
+    '</div></details>';
+}
+function pcCEditSave(id){
+  var g = function(i){ var e = document.getElementById(i); return e ? e : null; };
+  var p = { day_no: g('pcE_day').value, location: g('pcE_loc').value, no_expiry: g('pcE_noexp').checked, expiry_date: g('pcE_noexp').checked ? '' : g('pcE_exp').value,
+            qty: g('pcE_qty').value, remarks: g('pcE_rem').value };
+  if (g('pcE_code')) p.item_code = g('pcE_code').value.trim().toUpperCase();
+  if (g('pcE_addD')){ p.add_description = g('pcE_addD').value; p.add_unit = g('pcE_addU').value; }
+  pcDo('rpci_count_edit', { p_id: id, p: p }, function(d){ return d.changed ? 'Count row changed: ' + esc(d.changes) + (ME.role === 'Approver' ? '' : ' — the Approver will check it (To Do).') : 'Nothing changed.'; },
+    async function(){ PC.editId = null; await pcLoadCounts(true); pcCLists(); if (pcIsApv()) pcToAddPanel(); });
 }
 function pcCShowDesc(){ var c = document.getElementById('pcCCode').value.trim().toUpperCase(), it = pcDesc(c); document.getElementById('pcCDesc').textContent = c ? (it ? it.description + ' · ' + (it.unit || '') : 'not in the item list — tick "For add code"') : ''; }
 function pcCToggle(){
@@ -2330,7 +2378,7 @@ function pcCSubmit(){
   var rows = PC.cart.map(function(r){ return { location: r.location, item_code: r.item_code, to_add: r.to_add, add_description: r.add_description, add_unit: r.add_unit,
                                               expiry_date: r.expiry_date, no_expiry: r.no_expiry, qty: r.qty, remarks: r.remarks }; });
   pcDo('rpci_count_add', { p_period: PC.per.id, p_day: day, p_rows: rows }, function(d){ return d.rows + ' count row(s) saved (Day ' + day + ').'; },
-    async function(){ PC.cart = []; pcCCart(); await pcLoadCounts(true); pcCList(); if (pcIsApv()) pcToAddPanel(); });
+    async function(){ PC.cart = []; pcCCart(); await pcLoadCounts(true); pcCLists(); if (pcIsApv()) pcToAddPanel(); });
 }
 function pcCList(){
   var rows = PC.counts || [], fd = document.getElementById('pcCFDay').value, locSel = document.getElementById('pcCFLoc'), fl = locSel.value, q = document.getElementById('pcCFQ').value.trim().toLowerCase();
@@ -2341,21 +2389,20 @@ function pcCList(){
     return (!fd || String(r.day_no) === fd) && (!fl || r.location === fl) &&
       (!q || [r.item_code, r.add_description, it && it.description, r.remarks, r.encoded_by].join(' ').toLowerCase().indexOf(q) !== -1);
   });
-  var canDel = pcOpen() && pcCanEnc();
-  document.getElementById('pcCList').innerHTML = f.length ? '<div class="ap-note" style="margin-bottom:6px">' + f.length + ' row(s)</div><div class="ap-scroll"><table class="ap-tbl"><tr><th>Day</th><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th style="text-align:right">Count</th><th>Remarks</th><th>By</th><th></th></tr>' +
-    f.map(function(r){
-      var it = r.item_code ? pcDesc(r.item_code) : null;
-      var mine = pcIsApv() || r.encoded_by === ME.username;
-      return '<tr><td>' + r.day_no + '</td><td>' + esc(r.location) + '</td><td>' + (r.item_code ? esc(r.item_code) : '<span class="ap-tag warn">TO ADD</span>') + '</td>' +
-        '<td>' + esc(it ? it.description : (r.add_description || '')) + (r.to_add && r.item_code ? ' <span class="ap-ro">(added as ' + esc(r.add_description || '') + ')</span>' : '') + '</td>' +
-        '<td>' + esc(it ? (it.unit || '') : (r.add_unit || '')) + '</td><td>' + (r.no_expiry ? 'No expiry' : esc(toMDY(r.expiry_date))) + '</td>' +
-        '<td style="text-align:right">' + pcN(r.qty) + '</td><td>' + esc(r.remarks || '') + '</td><td class="ap-ro">' + esc(r.encoded_by || '') + '</td>' +
-        '<td>' + (canDel && mine ? '<button class="ap-btn sm red" onclick="pcCDel(' + r.id + ')">🗑</button>' : '') + '</td></tr>';
-    }).join('') + '</table></div>' : '<div class="ap-empty">Nothing counted yet.</div>';
+  var sum = document.getElementById('pcCAllSum');
+  if (sum) sum.innerHTML = '📋 Counted — all encoders: <b>' + rows.length + '</b> row(s) in <b>' + locs.length + '</b> location(s) (click to show / hide)';
+  var byLoc = {}; f.forEach(function(r){ (byLoc[r.location] = byLoc[r.location] || []).push(r); });
+  var keys = Object.keys(byLoc).sort(), one = keys.length === 1;
+  document.getElementById('pcCList').innerHTML = f.length ? '<div class="ap-note" style="margin-bottom:6px">' + f.length + ' row(s) · click a location to see its rows</div>' +
+    keys.map(function(L){ var rs = byLoc[L], open = one || PC.locOpen === L || (PC.editId && rs.some(function(r){ return r.id === PC.editId; }));
+      var tq = rs.reduce(function(a, r){ return a + Number(r.qty || 0); }, 0);
+      return '<details class="rp-cols" style="margin:6px 0"' + (open ? ' open' : '') + ' ontoggle="if(this.open)PC.locOpen=' + esc(JSON.stringify(L)).replace(/"/g, '&quot;') + '"><summary>📍 <b>' + esc(L) + '</b> — ' + rs.length + ' row(s) · total count ' + pcN(tq) + '</summary>' +
+        '<div class="ap-scroll" style="padding:4px 8px 8px"><table class="ap-tbl">' + PC_CHEAD(true) + rs.map(function(r){ return pcCRowHtml(r, true); }).join('') + '</table></div></details>'; }).join('')
+    : '<div class="ap-empty">Nothing counted yet.</div>';
 }
 function pcCDel(id){
   if (!confirm('Delete this count row?')) return;
-  pcDo('rpci_count_delete', { p_id: id }, function(){ return 'Count row deleted.'; }, async function(){ await pcLoadCounts(true); pcCList(); if (pcIsApv()) pcToAddPanel(); });
+  pcDo('rpci_count_delete', { p_id: id }, function(){ return 'Count row deleted.' + (ME.role === 'Approver' ? '' : ' The Approver will check it (To Do).'); }, async function(){ await pcLoadCounts(true); pcCLists(); if (pcIsApv()) pcToAddPanel(); });
 }
 function pcToAddPanel(){
   var el = document.getElementById('pcToAdd'); if (!el) return;
@@ -6319,6 +6366,7 @@ function apTodoRender(){
           '<td style="max-width:360px"><b>' + esc(t.issue) + '</b></td><td style="max-width:260px;font-size:.76rem">' + esc(t.details || '') +
             (done ? '<div class="ap-ro">✓ Done by ' + esc(t.done_by || '') + ' · ' + esc(toMDYTime(new Date(t.done_at))) + (t.done_note ? ' — ' + esc(t.done_note) : '') + '</div>' : '') + '</td>' +
           '<td class="nw">' + (t.po_number ? '<button class="sx-btn blue sm" onclick="apTodoOpen(\'' + esc(t.po_number) + '\')">Open PO</button> ' : '') +
+            (/^RPCI-EDIT:/.test(t.todo_key || '') ? '<button class="sx-btn blue sm" onclick="apTodoRpci(' + (+String(t.todo_key).split(':')[1] || 0) + ')">Open Physical Count</button> ' : '') +
             (!t.po_number && /^BEG-/.test(t.todo_key || '') ? '<button class="sx-btn blue sm" onclick="apBegOpen(\'' + esc(String(t.item || '').split(' — ')[0]) + '\')">Open Beg. Balance</button> ' : '') +
             (can ? (done ? '<button class="sx-btn gray sm" onclick="apTodoSet(' + t.id + ',false)">↺ Reopen</button>'
                          : (/^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || '') ? '<button class="sx-btn sm" style="background:#7d3c98;color:#fff" title="The extra delivered qty is from deliveries before the app (old monitoring) — correct as it is" onclick="apTodoOld([' + t.id + '])">✓ Old delivery (before the app)</button> ' : '') +
@@ -6326,6 +6374,7 @@ function apTodoRender(){
       }).join('') + '</tbody></table></div>' : '<div class="ap-empty">' + (TODO_SHOW === 'OPEN' ? '🎉 Nothing to do.' : 'Nothing here.') + '</div>') + '</div>';
 }
 // "the PO shows MORE delivered than its receipts" because of deliveries before the app → Done, it does not come back
+function apTodoRpci(pid){ PC.wantPer = pid; PC.tab = 'count'; PC.allOpen = true; showPage('rpci'); }
 function apTodoIsOld_(t){ return t.status === 'OPEN' && /^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || ''); }
 async function apTodoOld(ids){
   if (!ids.length) return;
