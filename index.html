@@ -1810,8 +1810,9 @@ function showPage(p){
 
 // ── PHYSICAL COUNT (RPCI) — update 97 ─────────────────────────────────────────
 var PC = { init: false, periods: [], per: null, tab: null, sheet: null, counts: null, cart: [], recon: null, sig: {}, acc: null, rep: null };
-var PC_ALL_TABS = [['pre', '1 Pre-count Sheet'], ['sheet', '2 Pre-count → Count Sheet'], ['count', '3 Count'], ['recon', '4 Reconcile'],
-                   ['acctg', '5 Accounting'], ['rpci', '6 RPCI'], ['post', '7 Post / Beg. Balance']];
+var PC_ALL_TABS = [['pre', '1 Pre-count Sheet'], ['sheet', '2 Encode Pre-count'], ['prerecon', '3 Pre-count vs System'], ['count', '4 Count'], ['recon', '5 Count vs System'],
+                   ['acctg', '6 Accounting'], ['rpci', '7 RPCI'], ['post', '8 Post / Beg. Balance']];
+function pcSemName(p){ return p.title || ((p.semester == 1 ? '1st' : '2nd') + ' Semester ' + (p.year || String(p.as_of).slice(0, 4))); }
 var PC_MARKS = ['OK', 'NEEDS RIS', 'NEEDS PO', 'ADJUST'];
 var PC_SIG_KEYS = [['rpci_entity', 'Entity name'], ['rpci_inv_type', 'Type of inventory item'],
   ['rpci_off_name', 'Accountable officer'], ['rpci_off_pos', 'Official designation'], ['rpci_off_date', 'Date of assumption'],
@@ -1853,9 +1854,10 @@ async function pcLoadPeriods(keep){
   } catch(e){ pcMsg('err', '❌ ' + esc(errText(e)) + ' — was update 97 run in Supabase?'); PC.periods = []; }
   var sel = document.getElementById('pcPer'), cur = keep || (PC.per && PC.per.id);
   sel.innerHTML = PC.periods.length ? PC.periods.map(function(p){
-      return '<option value="' + p.id + '">' + esc(p.unit) + ' — as at ' + esc(toMDY(p.as_of)) + (p.title ? ' · ' + esc(p.title) : '') + (p.status === 'POSTED' ? ' (POSTED)' : '') + '</option>';
+      return '<option value="' + p.id + '">' + esc(pcSemName(p)) + ' — ' + esc(p.unit) + (p.status === 'POSTED' ? ' (POSTED)' : '') + '</option>';
     }).join('') : '<option value="">— no count yet —</option>';
   if (cur && PC.periods.some(function(p){ return p.id == cur; })) sel.value = cur;
+  else { var mine = PC.periods.find(function(p){ return p.unit === u1(); }); if (mine) sel.value = mine.id; }
   document.getElementById('pcNewBtn').style.display = pcIsMgr() ? '' : 'none';
   document.getElementById('pcEditBtn').style.display = pcIsMgr() && PC.periods.length ? '' : 'none';
   pcPickPeriod();
@@ -1865,25 +1867,26 @@ function pcPickPeriod(){
   PC.per = PC.periods.find(function(p){ return String(p.id) === String(id); }) || null;
   PC.sheet = PC.counts = PC.recon = PC.acc = PC.rep = null; PC.cart = [];
   var tabs = pcTabs();
-  document.getElementById('pcTabs').innerHTML = tabs.map(function(t){ return '<button class="subtab-btn" id="pcTab_' + t[0] + '" onclick="pcSwitch(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('');
+  document.getElementById('pcTabs').innerHTML = !PC.per ? '' : tabs.map(function(t){ return '<button class="subtab-btn" id="pcTab_' + t[0] + '" onclick="pcSwitch(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('');
   pcInfo();
   pcSwitch(PC.tab && tabs.some(function(t){ return t[0] === PC.tab; }) ? PC.tab : tabs[0][0]);
 }
 function pcInfo(){
   var p = PC.per, el = document.getElementById('pcInfo');
   if (!p){ el.innerHTML = ''; return; }
-  var days = [1,2,3,4].map(function(d){ return p['day' + d] ? 'Day ' + d + ' = ' + toMDY(p['day' + d]) : ''; }).filter(Boolean).join(' · ');
+  var days = [1,2,3,4].map(function(d){ return p['day' + d] ? 'Day ' + d + ' ' + toMDY(p['day' + d]) : ''; }).filter(Boolean).join(', ');
   el.innerHTML = '<span class="ap-tag ' + (p.status === 'POSTED' ? 'ok' : 'warn') + '">' + esc(p.status) + '</span> ' +
-    '<b>' + esc(p.unit) + '</b> · as at ' + esc(toMDY(p.as_of)) + (days ? ' · ' + esc(days) : '') +
+    '<b>' + esc(pcSemName(p)) + ' — ' + esc(p.unit) + '</b> · as at ' + esc(toMDY(p.as_of)) +
+    ' · <b>Pre-count:</b> ' + (p.precount_date ? esc(toMDY(p.precount_date)) : '—') + ' · <b>Count:</b> ' + (days ? esc(days) : '—') +
     (p.snapshot_at ? ' · system balance taken ' + esc(toMDYTime(p.snapshot_at)) : '') + (p.posted_at ? ' · posted ' + esc(toMDYTime(p.posted_at)) + ' by ' + esc(p.posted_by || '') : '');
 }
 function pcSwitch(t){
   PC.tab = t; pcMsg('');
   document.querySelectorAll('#pcTabs .subtab-btn').forEach(function(b){ b.classList.toggle('active', b.id === 'pcTab_' + t); });
   var body = document.getElementById('pcBody');
-  if (!PC.per){ body.innerHTML = '<div class="ap-empty">' + (pcIsMgr() ? 'No count period yet — click <b>+ New count</b> to make one (the system balance of the unit is taken at that moment).' : 'No count period yet — the Approver makes one.') + '</div>'; return; }
+  if (!PC.per){ if (pcIsMgr()){ pcPeriodForm(true); return; } body.innerHTML = '<div class="ap-empty">No count period yet — the Approver makes one (per semester).</div>'; return; }
   body.innerHTML = '<div class="ap-empty">Loading…</div>';
-  ({ pre: pcPre, sheet: pcSheetTab, count: pcCount, recon: pcRecon, acctg: pcAcctg, rpci: pcRpci, post: pcPost })[t]();
+  ({ pre: pcPre, sheet: pcSheetTab, prerecon: pcPreRecon, count: pcCount, recon: pcRecon, acctg: pcAcctg, rpci: pcRpci, post: pcPost })[t]();
 }
 
 // ── period form ────────────────────────────────────────────────────────────────
@@ -1891,27 +1894,38 @@ function pcPeriodForm(isNew){
   var p = isNew ? {} : (PC.per || {});
   if (!isNew && !PC.per) return;
   var us = myUnits() || STOCK_UNITS;
-  var y = new Date().getFullYear();
-  var h = '<div class="ap-h">' + (isNew ? '+ New count period' : '✎ Count period') + '</div>' +
-    '<div class="ap-grid">' +
-    (isNew ? '<div class="ap-f"><label>Unit</label><select id="pcFUnit">' + apOpt(us, u1() || us[0]) + '</select></div>' : apField('Unit', 'pcFUnit', p.unit, { ro: true })) +
-    apField('As at (date of the RPCI)', 'pcFAsof', p.as_of || (y + '-12-31'), { type: 'date' }) +
-    apField('Title (optional)', 'pcFTitle', p.title || '') +
-    apField('Day 1', 'pcFD1', p.day1 || '', { type: 'date' }) + apField('Day 2', 'pcFD2', p.day2 || '', { type: 'date' }) +
-    apField('Day 3', 'pcFD3', p.day3 || '', { type: 'date' }) + apField('Day 4', 'pcFD4', p.day4 || '', { type: 'date' }) +
-    '</div><div class="ap-hint">' + (isNew ? 'Saving takes the system balance of the unit now (per batch: location, expiry, fund) — that is the BALANCE on the Pre-count Sheet.' : 'Changing the dates does not change the system balance taken. Use ↻ Retake system balance for that.') + '</div>' +
-    '<div class="ap-actions"><button class="ap-btn green" onclick="pcPeriodSave(' + (isNew ? 'null' : p.id) + ')">💾 Save</button>' +
-    '<button class="ap-btn gray" onclick="pcSwitch(PC.tab)">Cancel</button>' +
+  var now = new Date(), y = p.year || now.getFullYear(), sem = p.semester || (now.getMonth() < 6 ? 1 : 2);
+  var unitSel = isNew ? '<div class="ap-f"><label>Unit</label><select id="pcFUnit"><option value="ALL">All my units (' + esc(us.join(', ')) + ')</option>' + apOpt(us) + '</select></div>'
+                      : apField('Unit', 'pcFUnit', p.unit, { ro: true });
+  var h = '<div class="ap-h">' + (isNew ? '+ New count period (per semester)' : '✎ Count period') + '</div>' +
+    '<div class="ap-grid">' + unitSel +
+    '<div class="ap-f"><label>Semester</label><select id="pcFSem" onchange="pcFAsof()"><option value="1">1st Semester (as at 06/30)</option><option value="2">2nd Semester (as at 12/31)</option></select></div>' +
+    apField('Year', 'pcFYear', y, { type: 'number' }) +
+    '<div class="ap-f"><label>As at (RPCI)</label><div class="ap-ro" id="pcFAsofTxt" style="padding:9px 0"></div></div>' +
+    apField('Pre-count date', 'pcFPre', p.precount_date || '', { type: 'date' }) +
+    apField('Count — Day 1', 'pcFD1', p.day1 || '', { type: 'date' }) + apField('Count — Day 2', 'pcFD2', p.day2 || '', { type: 'date' }) +
+    apField('Count — Day 3', 'pcFD3', p.day3 || '', { type: 'date' }) + apField('Count — Day 4', 'pcFD4', p.day4 || '', { type: 'date' }) +
+    '</div><div class="ap-hint">' + (isNew ? 'Saving makes the <b>Pre-count Sheet</b> of the unit by itself — the system balance now, per location (A → Z), one row per item + expiry. Then: print it (tab 1), encode the pre-count (tab 2), check Pre-count vs System (tab 3), print the Count Sheet, count (tab 4).' : 'Changing the dates does not change the system balance taken. Use ↻ Retake system balance for that.') + '</div>' +
+    '<div class="ap-actions"><button class="ap-btn green" onclick="pcPeriodSave(' + (isNew ? 'null' : p.id) + ')">💾 Save' + (isNew ? ' and make the Pre-count Sheet' : '') + '</button>' +
+    (PC.per ? '<button class="ap-btn gray" onclick="pcSwitch(PC.tab)">Cancel</button>' : '') +
     (!isNew && pcIsMgr() && pcOpen() ? '<button class="ap-btn orange" onclick="pcSnapshot()">↻ Retake system balance</button>' : '') +
     (!isNew && pcIsApv() && pcOpen() ? '<button class="ap-btn red" onclick="pcPeriodDel()">🗑 Delete this count</button>' : '') + '</div>';
   pcMsg(''); document.getElementById('pcBody').innerHTML = h;
+  document.getElementById('pcFSem').value = sem; pcFAsof();
+  document.getElementById('pcFYear').oninput = pcFAsof;
+}
+function pcFAsof(){
+  var s = document.getElementById('pcFSem').value, y = document.getElementById('pcFYear').value;
+  document.getElementById('pcFAsofTxt').textContent = y ? (s === '1' ? '06/30/' : '12/31/') + y : '';
 }
 function pcPeriodSave(id){
-  var p = { id: id, unit: document.getElementById('pcFUnit').value, as_of: document.getElementById('pcFAsof').value,
-            title: document.getElementById('pcFTitle').value,
+  var p = { id: id, unit: document.getElementById('pcFUnit').value, semester: document.getElementById('pcFSem').value, year: document.getElementById('pcFYear').value,
+            precount_date: document.getElementById('pcFPre').value,
             day1: document.getElementById('pcFD1').value, day2: document.getElementById('pcFD2').value,
             day3: document.getElementById('pcFD3').value, day4: document.getElementById('pcFD4').value };
-  pcDo('rpci_period_save', { p: p }, function(){ return 'Count period saved.'; }, function(d){ return pcLoadPeriods(d.id); });
+  pcDo('rpci_period_save', { p: p }, function(d){ return id ? 'Count period saved.' : 'Count period made for ' + (d.ids || []).length + ' unit(s) — the Pre-count Sheet is ready (tab 1).' +
+      (d.skipped && d.skipped.length ? ' Already had one: ' + esc(d.skipped.join(', ')) + '.' : ''); },
+    function(d){ if (!id) PC.tab = 'pre'; return pcLoadPeriods(d.id); });
 }
 function pcSnapshot(){
   if (!confirm('Take the system balance again (now)? The Pre-count Sheet BALANCE will change to today\'s stock.')) return;
@@ -1971,7 +1985,7 @@ function pcPrintSheet(kind, loc){
     var head = '<tr class="hd"><td colspan="2" class="l"></td><td colspan="4" class="c ttl">SOUTHERN PHILIPPINES MEDICAL CENTER</td><td colspan="2"></td></tr>' +
       '<tr class="hd"><td colspan="2" class="l">LOCATION: <span class="ln">' + esc(L) + '</span></td><td colspan="4" class="c">' + (pre ? 'PRE-COUNT FORM' : 'INVENTORY COUNT FORM') + '</td>' +
         '<td colspan="2" class="r">' + (pre ? 'PRE-COUNTED BY:' : 'TEAM MEMBERS:') + ' <span class="ln" style="min-width:230px">&nbsp;</span></td></tr>' +
-      '<tr class="hd"><td colspan="2"></td><td colspan="4" class="c">' + (pre ? 'DATE OF PRE-COUNT:' : 'DATE OF COUNT:') + ' <span class="ln" style="min-width:110px">&nbsp;</span></td><td colspan="2"></td></tr>' +
+      '<tr class="hd"><td colspan="2"></td><td colspan="4" class="c">' + (pre ? 'DATE OF PRE-COUNT:' : 'DATE OF COUNT:') + ' <span class="ln" style="min-width:110px">' + (pre && PC.per.precount_date ? esc(toMDY(PC.per.precount_date)) : '&nbsp;') + '</span></td><td colspan="2"></td></tr>' +
       '<tr class="hd"><td colspan="8" style="height:6px"></td></tr>' +
       '<tr><th style="width:9%">CODE</th><th style="width:33%">ITEM DESCRIPTION</th><th style="width:6%">UNITS</th><th style="width:7%">' + (pre ? 'BALANCE' : 'PRE-COUNT') + '</th>' +
       '<th style="width:9%">EXPIRY DATE</th><th style="width:7%">ADVANCE</th><th style="width:8%">' + (pre ? 'PRE-COUNT' : 'COUNT') + '</th><th>REMARKS</th></tr>';
@@ -1996,21 +2010,20 @@ async function pcSheetTab(){
   var stat = locs.map(function(L){
     var rs = PC.sheet.filter(function(r){ return pcLocName(r.location) === L; });
     var saved = rs.some(function(r){ return r.precount_saved; });
-    return '<span class="ap-tag ' + (saved ? 'ok' : '') + '" style="margin:2px">' + esc(L) + (saved ? ' ✓' : '') + '</span>';
+    return '<span class="ap-tag ' + (saved ? 'ok' : '') + '" style="margin:2px;cursor:pointer" onclick="pcScOpen(this.dataset.l)" data-l="' + esc(L) + '">' + esc(L) + (saved ? ' ✓' : '') + '</span>';
   }).join(' ');
-  var h = '<div class="rp-filters"><div class="ap-f" style="min-width:260px"><label>Location</label><input type="text" id="pcScLoc" list="pcLocList" onchange="pcScTable()" placeholder="Pick or type the location"/>' + apDl('pcLocList', locs.concat(allLocs.filter(function(l){ return locs.indexOf(l) === -1; }))) + '</div>' +
-    '<button class="ap-btn" onclick="pcPrintSheet(\'count\', document.getElementById(\'pcScLoc\').value.trim().toUpperCase())">🖨 Print Count Sheet (this location)</button>' +
-    '<button class="ap-btn gray" onclick="pcPrintSheet(\'count\', \'\')">🖨 Print Count Sheet (all locations)</button></div>' +
-    '<div class="ap-hint">Encode the pre-count per location (it starts at the system balance). The variance stays here on screen only — the Count Sheet prints the PRE-COUNT. Locations with ✓ are saved:</div>' +
+  var h = '<div class="rp-filters"><div class="ap-f" style="min-width:260px"><label>Location</label><input type="text" id="pcScLoc" list="pcLocList" onchange="pcScTable()" placeholder="Pick or type the location"/>' + apDl('pcLocList', locs.concat(allLocs.filter(function(l){ return locs.indexOf(l) === -1; }))) + '</div></div>' +
+    '<div class="ap-hint">Pick a location (or click it below), type what the pre-counters wrote, then Save. Then check tab 3 Pre-count vs System. Locations with ✓ are saved:</div>' +
     '<div style="margin:-6px 0 14px">' + (stat || '—') + '</div><div id="pcScOut"></div>';
   document.getElementById('pcBody').innerHTML = h;
 }
 var PC_SC = [];
+function pcScOpen(L){ document.getElementById('pcScLoc').value = L; pcScTable(); }
 function pcScTable(){
   var L = document.getElementById('pcScLoc').value.trim().toUpperCase(); var out = document.getElementById('pcScOut');
   if (!L){ out.innerHTML = ''; return; }
   PC_SC = PC.sheet.filter(function(r){ return pcLocName(r.location) === L; }).map(function(r){
-    return { item_code: r.item_code, description: r.description, uom: r.uom, expiry_date: r.expiry_date, adv: r.is_advance, sys: Number(r.system_qty) || 0, qty: r.precount, remarks: r.precount_remarks || '', saved: r.precount_saved };
+    return { item_code: r.item_code, description: r.description, uom: r.uom, expiry_date: r.expiry_date, adv: r.is_advance, sys: Number(r.system_qty) || 0, qty: r.precount_saved ? r.precount : '', remarks: r.precount_remarks || '', saved: r.precount_saved };
   });
   pcScRender();
 }
@@ -2030,6 +2043,7 @@ function pcScRender(){
         '<td>' + (r.isNew && !ro ? '<button class="ap-btn sm red" onclick="PC_SC.splice(' + i + ',1);pcScRender()">✕</button>' : '') + '</td></tr>';
     }).join('') + '</table></div>' + apDl('pcItemList', []) +
     (ro ? '' : '<div class="ap-actions"><button class="ap-btn gray" onclick="PC_SC.push({isNew:true,sys:0,qty:\'\',remarks:\'\'});pcScRender()">+ Item found here (not in the list)</button>' +
+      '<button class="ap-btn gray" onclick="PC_SC.forEach(function(r){ if (r.qty === \'\' || r.qty == null) r.qty = r.sys; });pcScRender()">Fill the blanks with the system balance</button>' +
       '<button class="ap-btn green" onclick="pcScSave()">💾 Save pre-count of ' + esc(L) + '</button></div>');
   document.getElementById('pcScOut').innerHTML = h;
   var dl = document.getElementById('pcItemList');
@@ -2047,6 +2061,53 @@ function pcScSave(){
   var rows = PC_SC.map(function(r){ return { item_code: r.item_code, expiry_date: r.expiry_date || '', qty: r.qty, remarks: r.remarks }; });
   pcDo('rpci_precount_save', { p_period: PC.per.id, p_location: L, p_rows: rows }, function(d){ return 'Pre-count of ' + esc(L) + ' saved (' + d.rows + ' rows).'; },
     async function(){ await pcSheetTab(); document.getElementById('pcScLoc').value = L; pcScTable(); });
+}
+
+// ── 3 Pre-count vs System (stays in the system — not printed) → Count Sheet ─────────
+async function pcPreRecon(){
+  try { await pcLoadSheet(true); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var locs = pcSheetLocs(PC.sheet);
+  var sum = locs.map(function(L){
+    var rs = PC.sheet.filter(function(r){ return pcLocName(r.location) === L; }), saved = rs.some(function(r){ return r.precount_saved; });
+    var v = rs.filter(function(r){ return saved && Number(r.precount) !== Number(r.system_qty); });
+    return { L: L, n: rs.length, saved: saved, nv: v.length, sys: rs.reduce(function(a, r){ return a + Number(r.system_qty || 0); }, 0),
+             pre: saved ? rs.reduce(function(a, r){ return a + Number(r.precount || 0); }, 0) : null };
+  });
+  var notEnc = sum.filter(function(x){ return !x.saved; }).length, nVar = sum.reduce(function(a, x){ return a + x.nv; }, 0);
+  var h = '<div class="ap-hint">The pre-count vs the system balance, per location. This stays in the system only — it is not printed. When it is checked, print the <b>Count Sheet</b> (its PRE-COUNT column = the encoded pre-count).</div>' +
+    '<div style="margin:-6px 0 12px;display:flex;gap:6px;flex-wrap:wrap"><span class="ap-tag">' + locs.length + ' location(s)</span><span class="ap-tag ' + (notEnc ? 'warn' : 'ok') + '">' + notEnc + ' not encoded yet</span><span class="ap-tag ' + (nVar ? 'warn' : 'ok') + '">' + nVar + ' row(s) with variance</span></div>' +
+    '<div class="ap-scroll"><table class="ap-tbl"><tr><th>Location</th><th style="text-align:right">Rows</th><th>Pre-count</th><th style="text-align:right">System qty</th><th style="text-align:right">Pre-count qty</th><th style="text-align:right">Rows with variance</th><th></th></tr>' +
+    sum.map(function(x){ return '<tr><td>' + esc(x.L) + '</td><td style="text-align:right">' + x.n + '</td><td>' + (x.saved ? '<span class="ap-tag ok">encoded</span>' : '<span class="ap-tag warn">not yet</span>') + '</td>' +
+      '<td style="text-align:right">' + pcN(x.sys) + '</td><td style="text-align:right">' + (x.saved ? pcN(x.pre) : '') + '</td><td style="text-align:right" class="' + (x.nv ? 'rp-out' : '') + '">' + (x.saved ? x.nv : '') + '</td>' +
+      '<td><button class="ap-btn sm gray" data-l="' + esc(x.L) + '" onclick="pcPrintSheet(\'count\', this.dataset.l)">🖨 Count Sheet</button></td></tr>'; }).join('') +
+    '</table></div>' +
+    '<div class="ap-actions"><button class="ap-btn" onclick="pcPrintSheet(\'count\', \'\')">🖨 Print Count Sheet (all locations)</button></div>' +
+    '<div class="ap-h">Variances</div><div class="rp-filters"><div class="ap-f"><label>Show</label><select id="pcPrShow" onchange="pcPrTable()"><option value="var">Variances only</option><option value="all">All rows</option><option value="ne">Not encoded yet</option></select></div>' +
+    '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcPrLoc" onchange="pcPrTable()"><option value="">All locations</option>' + apOpt(locs) + '</select></div>' +
+    '<button class="ap-btn gray" onclick="pcPrExcel()">⬇ Excel</button></div><div id="pcPrOut"></div>';
+  document.getElementById('pcBody').innerHTML = h; pcPrTable();
+}
+function pcPrRows(){
+  var s = document.getElementById('pcPrShow').value, L = document.getElementById('pcPrLoc').value;
+  var enc = {}; PC.sheet.forEach(function(r){ if (r.precount_saved) enc[pcLocName(r.location)] = true; });
+  return PC.sheet.filter(function(r){ var l = pcLocName(r.location), e = !!enc[l];
+    return (!L || l === L) && (s === 'all' || (s === 'ne' && !e) || (s === 'var' && e && Number(r.precount) !== Number(r.system_qty))); });
+}
+function pcPrTable(){
+  var rows = pcPrRows();
+  document.getElementById('pcPrOut').innerHTML = rows.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl"><tr><th>Location</th><th>Code</th><th>Description</th><th>Unit</th><th>Expiry</th><th>Adv.</th><th style="text-align:right">System</th><th style="text-align:right">Pre-count</th><th style="text-align:right">Variance</th><th>Remarks</th></tr>' +
+    rows.map(function(r){ var v = r.precount_saved ? Number(r.precount) - Number(r.system_qty) : null;
+      return '<tr><td>' + esc(pcLocName(r.location)) + '</td><td>' + esc(r.item_code) + '</td><td>' + esc(r.description || '') + '</td><td>' + esc(r.uom || '') + '</td><td>' + esc(r.expiry_date ? toMDY(r.expiry_date) : '') + '</td><td>' + (r.is_advance ? '✓' : '') + '</td>' +
+        '<td style="text-align:right">' + pcN(r.system_qty) + '</td><td style="text-align:right">' + (r.precount_saved ? pcN(r.precount) : '') + '</td>' +
+        '<td style="text-align:right" class="' + (v < 0 ? 'rp-out' : v > 0 ? 'rp-in' : '') + '">' + (v ? pcN(v) : '') + '</td><td>' + esc(r.precount_remarks || '') + '</td></tr>'; }).join('') +
+    '</table></div>' : '<div class="ap-empty">' + (document.getElementById('pcPrShow').value === 'var' ? 'No variance in the encoded locations.' : 'No rows.') + '</div>';
+}
+function pcPrExcel(){
+  var aoa = [['Location','Code','Description','Unit','Expiry','Advance','System','Pre-count','Variance','Remarks']];
+  pcPrRows().forEach(function(r){ var e = r.precount_saved; aoa.push([pcLocName(r.location), r.item_code, r.description || '', r.uom || '', r.expiry_date || '', r.is_advance ? '✓' : '',
+    Number(r.system_qty), e ? Number(r.precount) : '', e ? Number(r.precount) - Number(r.system_qty) : '', r.precount_remarks || '']); });
+  var ws = xlsMdy(XLSX.utils.aoa_to_sheet(aoa)), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Pre-count vs System');
+  XLSX.writeFile(wb, 'Pre-count vs System ' + PC.per.unit + ' ' + pcSemName(PC.per) + '.xlsx');
 }
 
 // ── 3 Count ──────────────────────────────────────────────────────────────────────
@@ -2175,7 +2236,7 @@ async function pcRecon(){
   var locs = []; PC.recon.forEach(function(x){ var l = pcLocName(x.location); if (locs.indexOf(l) === -1) locs.push(l); }); locs.sort();
   var cnt = PC.recon.filter(function(x){ return x.counted && Number(x.variance) !== 0; }), nc = PC.recon.filter(function(x){ return !x.counted; });
   var unm = cnt.filter(function(x){ return ['ADJUST','OK'].indexOf(x.action || '') === -1; }).length;
-  var h = '<div class="ap-hint">Count vs the system now (a RIS or PO made after the count changes the system, so the variance goes down). Mark each variance: <b>NEEDS RIS</b> / <b>NEEDS PO</b> (make it, then it is fixed) or <b>ADJUST</b> (posted in step 7). Not-counted locations are not changed.</div>' +
+  var h = '<div class="ap-hint">Count vs the system now (a RIS or PO made after the count changes the system, so the variance goes down). Mark each variance: <b>NEEDS RIS</b> / <b>NEEDS PO</b> (make it, then it is fixed) or <b>ADJUST</b> (posted in step 8). Not-counted locations are not changed.</div>' +
     '<div style="margin:-6px 0 12px;display:flex;gap:6px;flex-wrap:wrap"><span class="ap-tag">' + cnt.length + ' variance(s)</span><span class="ap-tag ' + (unm ? 'warn' : 'ok') + '">' + unm + ' not ready to post</span>' + (nc.length ? '<span class="ap-tag warn">' + nc.length + ' row(s) in locations not counted</span>' : '') + '</div>' +
     '<div class="rp-filters"><div class="ap-f"><label>Show</label><select id="pcRShow" onchange="pcRTable()"><option value="var">Variances only</option><option value="all">All rows</option><option value="nc">Not counted</option></select></div>' +
     '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcRLoc" onchange="pcRTable()"><option value="">All locations</option>' + apOpt(locs) + '</select></div>' +
@@ -2321,7 +2382,7 @@ async function pcPLoad(){
   try { var r = await sb.rpc('rpci_report', { p_period: PC.per.id, p_fund: PC.fund }); if (r.error) throw r.error; PC.rep = r.data || []; }
   catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
   var tv = PC.rep.reduce(function(a, x){ return a + Number(x.diff_value || 0); }, 0);
-  document.getElementById('pcPOut').innerHTML = (PC.per.status !== 'POSTED' ? '<div class="ap-hint">Not posted yet — Balance per Card is the system now; it stays fixed once posted (step 7).</div>' : '') +
+  document.getElementById('pcPOut').innerHTML = (PC.per.status !== 'POSTED' ? '<div class="ap-hint">Not posted yet — Balance per Card is the system now; it stays fixed once posted (step 8).</div>' : '') +
     '<div style="margin:0 0 10px"><span class="ap-tag">' + PC.rep.length + ' item(s)</span> <span class="ap-tag ' + (Math.abs(tv) < 0.01 ? 'ok' : 'warn') + '">Shortage/Overage ₱' + pcP(tv) + '</span></div>' +
     (PC.rep.length ? '<div class="ap-scroll" style="max-height:600px"><table class="ap-tbl"><tr><th>Article</th><th>Description</th><th>Stock No.</th><th>Unit</th><th style="text-align:right">Unit value</th><th style="text-align:right">Balance per card</th><th style="text-align:right">On hand per count</th><th style="text-align:right">Short/Over qty</th><th style="text-align:right">Short/Over value</th><th>Remarks</th></tr>' +
       PC.rep.map(function(x){ var d = Number(x.diff_qty);
@@ -2380,8 +2441,8 @@ async function pcPost(){
     var li = function(good, t){ return '<li style="margin:5px 0">' + (good ? '✅ ' : '⛔ ') + t + '</li>'; };
     h = '<div class="ap-h">Before posting</div><ul style="list-style:none;padding:0;font-size:.86rem">' +
       li(counts.length > 0, counts.length + ' count row(s) encoded') +
-      li(!toAdd, toAdd ? toAdd + ' "For add code" row(s) still need a code (step 3, TO ADD)' : 'every counted row has an item code') +
-      li(!notReady, notReady ? notReady + ' variance(s) not marked ADJUST yet, or still waiting for the RIS / PO (step 4)' : vars.length + ' variance(s) ready') +
+      li(!toAdd, toAdd ? toAdd + ' "For add code" row(s) still need a code (step 4, TO ADD)' : 'every counted row has an item code') +
+      li(!notReady, notReady ? notReady + ' variance(s) not marked ADJUST yet, or still waiting for the RIS / PO (step 5)' : vars.length + ' variance(s) ready') +
       (nc.length ? '<li style="margin:5px 0">⚠️ Not counted (will not be changed): ' + esc(nc.join(', ')) + '</li>' : '') + '</ul>' +
       '<div class="ap-hint">Posting makes the stock of every counted location / item / expiry equal to the count, per fund: shortages are taken out of the batches (newest first), overages become new batches — all with reference <b>RPCI ' + esc(toMDY(p.as_of)) + '</b> on the stock card, dated ' + esc(toMDY(p.as_of < TODAY_STR ? p.as_of : TODAY_STR)) + '. The RPCI figures are kept as they were. This cannot be undone.</div>' +
       (pcIsApv() ? '<div class="ap-actions"><button class="ap-btn green" ' + (ok ? '' : 'disabled') + ' onclick="pcDoPost()">✔ Post — the stock becomes the count (' + esc(pcBegLabel()) + ')</button></div>' : '<div class="ap-note">Only the Approver posts.</div>');
