@@ -2141,29 +2141,64 @@ function pcScTable(){
 function pcScRender(){
   var L = document.getElementById('pcScLoc').value.trim().toUpperCase(), ro = !pcOpen() || !pcCanEnc();
   var items = (AP_LISTS ? AP_LISTS.items : []);
-  var h = '<div class="ap-scroll"><table class="ap-tbl"><tr><th>Code</th><th>Item description</th><th>Units</th><th>Expiry</th><th>Adv.</th><th style="text-align:right">System</th><th style="width:110px">Pre-count</th><th style="text-align:right">Variance</th><th>Remarks</th><th></th></tr>' +
+  var bar = ro ? '' :
+    '<div class="ap-h" style="margin-top:0">+ Add item found here (not in the list)</div>' +
+    '<div class="rp-filters" style="align-items:flex-end">' +
+    '<div class="ap-f" style="min-width:300px;flex:1"><label>Item — search code or description</label><input type="text" id="pcAddCode" list="pcItemList" oninput="pcAddDesc()" placeholder="Type to search…"/><div class="ap-ro" id="pcAddDescTxt" style="margin-top:3px;min-height:1em"></div></div>' +
+    '<div class="ap-f" style="min-width:150px;max-width:170px"><label>Expiry date</label><input type="date" id="pcAddExp"/></div>' +
+    '<label style="display:flex;gap:5px;align-items:center;font-size:.8rem;margin-bottom:26px"><input type="checkbox" id="pcAddNoExp" onchange="document.getElementById(\'pcAddExp\').disabled=this.checked;if(this.checked)document.getElementById(\'pcAddExp\').value=\'\'"/> No expiry</label>' +
+    '<div class="ap-f" style="min-width:100px;max-width:120px"><label>Pre-count</label><input type="number" id="pcAddQty" min="0" step="any" onkeydown="if(event.key===\'Enter\')pcScAdd()"/></div>' +
+    '<div class="ap-f" style="min-width:150px"><label>Remarks</label><input type="text" id="pcAddRem" onkeydown="if(event.key===\'Enter\')pcScAdd()"/></div>' +
+    '<button class="ap-btn" onclick="pcScAdd()" style="margin-bottom:22px">+ Add</button></div>';
+  var h = bar +
+    '<div class="rp-filters" style="align-items:flex-end"><div class="ap-f" style="min-width:300px"><label>Find in this location\'s list</label><input type="text" id="pcScFind" oninput="pcScFind()" placeholder="code / description"/></div>' +
+    '<span class="ap-note" id="pcScCnt" style="margin-bottom:10px"></span></div>' +
+    '<div class="ap-scroll" style="max-height:560px"><table class="ap-tbl" id="pcScTbl"><tr><th>Code</th><th>Item description</th><th>Units</th><th>Expiry</th><th>Adv.</th><th style="text-align:right">System</th><th style="width:110px">Pre-count</th><th style="text-align:right">Variance</th><th>Remarks</th><th></th></tr>' +
     PC_SC.map(function(r, i){
-      var v = (Number(r.qty) || 0) - r.sys;
-      return '<tr><td>' + (r.isNew && !ro ? '<input type="text" list="pcItemList" value="' + esc(r.item_code || '') + '" onchange="pcScSet(' + i + ',\'item_code\',this.value)"/>' : esc(r.item_code)) + '</td>' +
+      var typed = r.qty !== '' && r.qty != null, v = typed ? (Number(r.qty) || 0) - r.sys : 0;
+      return '<tr data-f="' + esc((r.item_code + ' ' + (r.description || '')).toLowerCase()) + '"' + (r.isNew ? ' style="background:#eef8f1"' : '') + '><td>' + esc(r.item_code) + (r.isNew ? ' <span class="ap-tag ok">added</span>' : '') + '</td>' +
         '<td>' + esc(r.description || '') + '</td><td>' + esc(r.uom || '') + '</td>' +
-        '<td>' + (r.isNew && !ro ? '<input type="date" value="' + esc(r.expiry_date || '') + '" onchange="pcScSet(' + i + ',\'expiry_date\',this.value)"/>' : esc(r.expiry_date ? toMDY(r.expiry_date) : '')) + '</td>' +
+        '<td>' + (r.no_exp ? 'No expiry' : esc(r.expiry_date ? toMDY(r.expiry_date) : '')) + '</td>' +
         '<td>' + (r.adv ? '✓' : '') + '</td><td style="text-align:right">' + pcN(r.sys) + '</td>' +
         '<td><input type="number" min="0" step="any" value="' + esc(r.qty == null ? '' : r.qty) + '" ' + (ro ? 'readonly' : '') + ' oninput="pcScSet(' + i + ',\'qty\',this.value)"/></td>' +
         '<td style="text-align:right" id="pcScV' + i + '" class="' + (v < 0 ? 'rp-out' : v > 0 ? 'rp-in' : '') + '">' + (v ? pcN(v) : '') + '</td>' +
         '<td><input type="text" value="' + esc(r.remarks) + '" ' + (ro ? 'readonly' : '') + ' oninput="pcScSet(' + i + ',\'remarks\',this.value)"/></td>' +
         '<td>' + (r.isNew && !ro ? '<button class="ap-btn sm red" onclick="PC_SC.splice(' + i + ',1);pcScRender()">✕</button>' : '') + '</td></tr>';
     }).join('') + '</table></div>' + apDl('pcItemList', []) +
-    (ro ? '' : '<div class="ap-actions"><button class="ap-btn gray" onclick="PC_SC.push({isNew:true,sys:0,qty:\'\',remarks:\'\'});pcScRender()">+ Item found here (not in the list)</button>' +
+    (ro ? '' : '<div class="ap-actions">' +
       '<button class="ap-btn gray" onclick="PC_SC.forEach(function(r){ if (r.qty === \'\' || r.qty == null) r.qty = r.sys; });pcScRender()">Fill the blanks with the system balance</button>' +
       '<button class="ap-btn green" onclick="pcScSave()">💾 Save pre-count of ' + esc(L) + '</button></div>');
   document.getElementById('pcScOut').innerHTML = h;
   var dl = document.getElementById('pcItemList');
   if (dl) dl.innerHTML = items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('');
+  pcScFind();
+}
+function pcAddDesc(){ var c = document.getElementById('pcAddCode').value.trim().toUpperCase(), it = pcDesc(c); document.getElementById('pcAddDescTxt').textContent = c ? (it ? it.description + ' · ' + (it.unit || '') : 'not in the item list') : ''; }
+function pcScFind(){
+  var el = document.getElementById('pcScFind'); if (!el) return;
+  var q = el.value.trim().toLowerCase(), n = 0, all = 0;
+  document.querySelectorAll('#pcScTbl tr[data-f]').forEach(function(tr){ var ok = !q || tr.dataset.f.indexOf(q) !== -1; tr.style.display = ok ? '' : 'none'; all++; if (ok) n++; });
+  var typed = PC_SC.filter(function(r){ return r.qty !== '' && r.qty != null; }).length;
+  document.getElementById('pcScCnt').textContent = (q ? n + ' of ' + all + ' row(s) shown · ' : all + ' row(s) · ') + typed + ' typed, ' + (all - typed) + ' blank';
+}
+// add an item found at this location (or set the pre-count of a row already in the list)
+function pcScAdd(){
+  var code = document.getElementById('pcAddCode').value.trim().toUpperCase(), it = pcDesc(code);
+  var ne = document.getElementById('pcAddNoExp').checked, exp = ne ? '' : document.getElementById('pcAddExp').value;
+  var qty = document.getElementById('pcAddQty').value, rem = document.getElementById('pcAddRem').value.trim();
+  var err = !it ? 'Pick the item from the list (search by code or description).' : (!ne && !exp) ? 'Type the expiry date (or tick "No expiry").' : qty === '' ? 'Type the pre-count.' : '';
+  if (err){ pcMsg('err', err); return; }
+  pcMsg('');
+  var same = PC_SC.find(function(r){ return r.item_code === it.item_code && String(r.expiry_date || '') === String(exp || ''); });
+  if (same){ same.qty = qty; if (rem) same.remarks = rem; }
+  else PC_SC.unshift({ isNew: true, item_code: it.item_code, description: it.description, uom: it.unit, expiry_date: exp, no_exp: ne, adv: false, sys: 0, qty: qty, remarks: rem });
+  pcScRender();
+  pcMsg('ok', same ? '✅ ' + esc(it.item_code) + ' is already in the list — its pre-count is now ' + esc(qty) + '. Save to keep it.' : '✅ ' + esc(it.item_code) + ' added at the top. Save to keep it.');
+  document.getElementById('pcAddCode').focus();
 }
 function pcScSet(i, k, v){
   var r = PC_SC[i]; r[k] = v;
-  if (k === 'item_code'){ var it = pcDesc(String(v).trim().toUpperCase()); r.item_code = String(v).trim().toUpperCase(); r.description = it ? it.description : '(not in the item list)'; r.uom = it ? it.unit : ''; pcScRender(); return; }
-  if (k === 'qty'){ var d = (Number(v) || 0) - r.sys, c = document.getElementById('pcScV' + i); if (c){ c.textContent = d ? pcN(d) : ''; c.className = d < 0 ? 'rp-out' : d > 0 ? 'rp-in' : ''; } }
+  if (k === 'qty'){ var typed = v !== '', d = typed ? (Number(v) || 0) - r.sys : 0, c = document.getElementById('pcScV' + i); if (c){ c.textContent = d ? pcN(d) : ''; c.className = d < 0 ? 'rp-out' : d > 0 ? 'rp-in' : ''; } pcScFind(); }
 }
 function pcScSave(){
   var L = document.getElementById('pcScLoc').value.trim().toUpperCase();
@@ -2235,7 +2270,7 @@ async function pcCount(){
       '<div class="rp-filters"><div class="ap-f"><label>Count day</label><select id="pcCDay">' + dayOpts + '</select></div>' +
       '<div class="ap-f" style="min-width:240px"><label>Location *</label><input type="text" id="pcCLoc" list="pcCLocList"/>' + apDl('pcCLocList', locs) + '</div></div>' +
       '<div class="rp-filters" style="align-items:flex-end">' +
-      '<div class="ap-f" style="min-width:230px" id="pcCCodeBox"><label>Item code</label><input type="text" id="pcCCode" list="pcCItemList" oninput="pcCShowDesc()"/><datalist id="pcCItemList">' +
+      '<div class="ap-f" style="min-width:300px;flex:1" id="pcCCodeBox"><label>Item — search code or description</label><input type="text" id="pcCCode" list="pcCItemList" oninput="pcCShowDesc()" placeholder="Type to search…"/><datalist id="pcCItemList">' +
         items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' +
         '<div class="ap-ro" id="pcCDesc" style="margin-top:3px"></div></div>' +
       '<div class="ap-f" id="pcCAddBox" style="display:none;min-width:260px"><label>Description (for add code)</label><input type="text" id="pcCAddD"/></div>' +
