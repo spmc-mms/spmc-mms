@@ -2060,11 +2060,13 @@ function pcPreTable(){
     '</table></div>' : '<div class="ap-empty">No stock in the system balance.</div>';
 }
 
-var PC_PRINT_CSS = '@page{size:13in 8.5in;margin:.35in .4in}body{font-family:Arial,Helvetica,sans-serif;font-size:10.5px;color:#000;margin:0;width:12.2in}' +
-  '.sec{page-break-after:always}.sec:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse}thead{display:table-header-group}' +
-  '.hd td{border:0;padding:1px 4px;font-size:11px}.hd .c{text-align:center}.hd .ttl{font-weight:700;font-size:13px;white-space:nowrap}.hd .r{text-align:right;white-space:nowrap}.hd .l{white-space:nowrap}' +
-  'th{border:1px solid #000;padding:4px 3px;font-size:10px}td.b{border:1px solid #000;padding:3px 4px;height:19px;vertical-align:middle}' +
-  '.n{text-align:right}.ct{text-align:center}.ck{font-size:9px;white-space:nowrap}.ln{display:inline-block;border-bottom:1px solid #000;min-width:190px}';
+var PC_PRINT_CSS = '@page{size:13in 8.5in;margin:.3in .35in}body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#000;margin:0;width:12.3in}' +
+  '.sec{page-break-after:always;page-break-inside:avoid}.sec:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse;table-layout:fixed}' +
+  '.hd td{border:0;padding:2px 4px;font-size:12.5px}.hd .c{text-align:center}.hd .ttl{font-weight:700;font-size:15px;white-space:nowrap}.hd .r{text-align:right;white-space:nowrap}.hd .l{white-space:nowrap}' +
+  'th{border:1px solid #000;padding:6px 4px;font-size:12px;height:.3in}td.b{border:1px solid #000;padding:2px 6px;height:.27in;vertical-align:middle;font-size:12.5px;line-height:1.15;overflow:hidden}' +
+  'td.d{font-size:11.5px}.n{text-align:right}.ct{text-align:center}.ck{font-size:11px;white-space:nowrap}.ln{display:inline-block;border-bottom:1px solid #000;min-width:190px}' +
+  '.pg{text-align:right;font-size:10px;margin-top:3px}';
+var PC_PER_PAGE = 20;
 function pcPrintSheet(kind, loc){
   var rows = (PC.sheet || []).filter(function(r){ return !loc || pcLocName(r.location) === loc; });
   if (kind === 'count') rows = rows.filter(function(r){ return Number(r.precount) !== 0 || Number(r.system_qty) !== 0; });
@@ -2081,36 +2083,34 @@ function pcPrintSheet(kind, loc){
       '<tr class="hd"><td colspan="8" style="height:6px"></td></tr>' +
       '<tr><th style="width:9%">CODE</th><th style="width:33%">ITEM DESCRIPTION</th><th style="width:6%">UNITS</th><th style="width:7%">' + (pre ? 'BALANCE' : 'PRE-COUNT') + '</th>' +
       '<th style="width:9%">EXPIRY DATE</th><th style="width:7%">ADVANCE</th><th style="width:8%">' + (pre ? 'PRE-COUNT' : 'COUNT') + '</th><th>REMARKS</th></tr>';
-    var body = rs.map(function(r){
-      return '<tr><td class="b">' + esc(r.item_code) + '</td><td class="b">' + esc(r.description || '') + '</td><td class="b ct">' + esc(r.uom || '') + '</td>' +
+    var blank = '<tr><td class="b"></td><td class="b d"></td><td class="b"></td><td class="b"></td><td class="b"></td><td class="b ck">☐ Check</td><td class="b"></td><td class="b"></td></tr>';
+    var trs = rs.map(function(r){
+      return '<tr><td class="b">' + esc(r.item_code) + '</td><td class="b d">' + esc(r.description || '') + '</td><td class="b ct">' + esc(r.uom || '') + '</td>' +
         '<td class="b n">' + pcN(pre ? r.system_qty : r.precount) + '</td><td class="b ct">' + esc(r.expiry_date ? toMDY(r.expiry_date) : '') + '</td>' +
         '<td class="b ck">' + (r.is_advance ? '☑' : '☐') + ' Check</td><td class="b"></td><td class="b">' + (!pre && r.precount_remarks ? esc(r.precount_remarks) : '') + '</td></tr>';
-    }).join('');
-    return '<div class="sec"><table><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
+    });
+    // up to 20 rows per page (fewer when long descriptions take 3+ lines); the last page is filled with
+    // blank rows (at least 3 blank rows for items found there)
+    var rowIn = function(r){ var ln = Math.max(1, Math.ceil(String(r.description || '').length / 52)); return ln <= 2 ? 0.33 : 0.12 + ln * 0.155; };
+    var budget = 6.62, pagesArr = [], cur = [], used = 0;
+    rs.forEach(function(r, i){ var h = rowIn(r);
+      if (cur.length && (cur.length >= PC_PER_PAGE || used + h > budget)){ pagesArr.push(cur); cur = []; used = 0; }
+      cur.push(trs[i]); used += h; });
+    var fill = function(){ while (cur.length < PC_PER_PAGE && used + 0.33 <= budget){ cur.push(blank); used += 0.33; } };
+    var room = Math.min(PC_PER_PAGE - cur.length, Math.floor((budget - used) / 0.33));
+    if (room < 3){ fill(); pagesArr.push(cur); cur = []; used = 0; }
+    fill(); pagesArr.push(cur);
+    var pages = pagesArr.length, out = '';
+    pagesArr.forEach(function(pg, pgn){
+      out += '<div class="sec"><table><colgroup><col style="width:8%"><col style="width:34%"><col style="width:6%"><col style="width:7%"><col style="width:8.5%"><col style="width:7%"><col style="width:8%"><col></colgroup><thead>' + head + '</thead><tbody>' + pg.join('') + '</tbody></table>' +
+             '<div class="pg">' + esc(L) + ' — page ' + (pgn + 1) + ' of ' + pages + '</div></div>';
+    });
+    return out;
   }).join('');
   w.document.open();
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + (pre ? 'Pre-count Form' : 'Inventory Count Form') + '</title><style>' + PC_PRINT_CSS + '</style></head><body>' + html + '</body></html>');
   w.document.close(); w.focus();
-  setTimeout(function(){ pcFillBlankRows(w.document); setTimeout(function(){ w.print(); }, 150); }, 250);
-}
-// blank rows down to the end of the last page of each location (long bond paper 13 × 8.5 in, landscape)
-var PC_BLANK_ROW = '<td class="b"></td><td class="b"></td><td class="b"></td><td class="b"></td><td class="b"></td><td class="b ck">☐ Check</td><td class="b"></td><td class="b"></td>';
-function pcFillBlankRows(doc){
-  var pageH = 7.8 * 96 - 6;                                 // 8.5in − top/bottom margins, in px (a little room to spare)
-  doc.querySelectorAll('.sec table').forEach(function(t){
-    var headH = t.tHead.getBoundingClientRect().height, tb = t.tBodies[0];
-    var add = function(){ var tr = doc.createElement('tr'); tr.innerHTML = PC_BLANK_ROW; tb.appendChild(tr); return tr.getBoundingClientRect().height; };
-    var probe = add(); tb.removeChild(tb.lastChild);         // height of one blank row
-    // walk the rows like the printer does (the header repeats on every page)
-    var y = headH;
-    Array.prototype.forEach.call(tb.rows, function(r){ var h = r.getBoundingClientRect().height; if (y + h > pageH){ y = headH + h; } else y += h; });
-    var n = 0;
-    while (y + probe <= pageH || n < 3){                    // fill the page; at least 3 blank rows (they go on a new page if no room)
-      if (y + probe > pageH) y = headH;
-      add(); y += probe; n++;
-      if (n > 200) break;
-    }
-  });
+  setTimeout(function(){ w.print(); }, 300);
 }
 
 // ── 2 Pre-count encode → Count Sheet ───────────────────────────────────────────
