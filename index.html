@@ -2264,7 +2264,18 @@ async function pcCount(){
   var today = TODAY_STR, dSel = 1; [1,2,3,4].forEach(function(d){ if (p['day' + d] === today) dSel = d; });
   var locs = (AP_LISTS ? AP_LISTS.loc : []).map(function(l){ return l.location; });
   var items = (AP_LISTS ? AP_LISTS.items : []);
-  var h = '';
+  var hist = PC.cview === 'history';
+  var h = '<div style="display:flex;justify-content:flex-end;margin:-4px 0 4px"><button class="btn btn-out btn-sm" onclick="PC.cview=' + (hist ? '\'form\'' : '\'history\'') + ';PC.editId=null;pcCount()">' +
+          (hist ? '📝 Back to Count Form' : '📜 Counted History') + '</button></div>';
+  if (hist){
+    h += '<div class="ap-h">📜 Counted History — all encoders, per location</div>' +
+      '<div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
+      '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
+      '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()" placeholder="code / description / encoder"/></div></div>' +
+      '<div id="pcCAllSum" class="ap-note" style="margin-bottom:6px"></div><div id="pcCList"></div>' +
+      '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
+    document.getElementById('pcBody').innerHTML = h; pcCList(); return;
+  }
   if (!ro){
     h += '<div class="ap-h">Encode the count — add up to 10 items, then Submit</div>' +
       '<div class="rp-filters"><div class="ap-f"><label>Count day</label><select id="pcCDay">' + dayOpts + '</select></div>' +
@@ -2283,18 +2294,15 @@ async function pcCount(){
       '<button class="ap-btn" onclick="pcCAdd()" style="margin-bottom:2px">+ Add</button></div>' +
       '<div id="pcCCart"></div>';
   }
-  if (!ro) h += '<div id="pcCMine"></div>';
   if (pcIsApv()) h += '<div id="pcToAdd"></div>';
-  h += '<details class="rp-cols" id="pcCAllDet" style="margin-top:14px"' + (PC.allOpen ? ' open' : '') + ' ontoggle="PC.allOpen=this.open"><summary id="pcCAllSum">📋 Counted — all encoders, per location (click to show)</summary><div style="padding:6px 12px 12px">' +
-    '<div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
-    '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
-    '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()"/></div></div><div id="pcCList"></div></div></details>' +
-    '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
+  if (!ro) h += '<div id="pcCMine"></div>';
+  h += '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
   document.getElementById('pcBody').innerHTML = h;
   if (!ro){ document.getElementById('pcCDay').value = dSel; pcCCart(); }
   pcCLists(); if (pcIsApv()) pcToAddPanel();
 }
 function pcCLists(){ pcCMine(); pcCList(); }
+function pcDay_(ts){ return ts ? ymd(new Date(ts)) : ''; }
 function pcCanEditRow(r){ return pcOpen() && pcCanEnc() && (r.encoded_by === ME.username || ME.role === 'Approver' || ME.role === 'Admin'); }
 // one count row — or its edit form when it is the one being edited
 function pcCRowHtml(r, withBy){
@@ -2320,15 +2328,13 @@ var PC_CHEAD = function(withBy){ return '<tr><th>Day</th><th>Location</th><th>Co
 // what this user submitted — newest batch first, so a mistake can be found and changed
 function pcCMine(){
   var el = document.getElementById('pcCMine'); if (!el) return;
-  var mine = (PC.counts || []).filter(function(r){ return r.encoded_by === ME.username; });
-  if (!mine.length){ el.innerHTML = ''; return; }
+  var mine = (PC.counts || []).filter(function(r){ return r.encoded_by === ME.username && pcDay_(r.created_at) === TODAY_STR; });
+  if (!mine.length){ el.innerHTML = '<div class="ap-h" style="margin-top:18px">Your count today</div><div class="ap-note">Nothing submitted by you today yet. Older entries → 📜 Counted History.</div>'; return; }
   var batches = []; mine.forEach(function(r){ var b = batches.find(function(x){ return x.b === r.batch_no; }); if (!b){ b = { b: r.batch_no, at: r.created_at, rows: [] }; batches.push(b); } b.rows.push(r); });
-  var show = PC.mineAll ? batches : batches.slice(0, 3);
-  el.innerHTML = '<details class="rp-cols" open style="margin-top:10px"><summary>✔ What you submitted — ' + mine.length + ' row(s) in ' + batches.length + ' submit(s) · ✎ to change (the Approver is told in To Do)</summary><div style="padding:6px 12px 12px">' +
-    show.map(function(b, k){ return '<div class="ap-note" style="margin:8px 0 4px">' + (k === 0 ? '<b>Last submit</b> · ' : '') + esc(toMDYTime(b.at)) + ' · ' + b.rows.length + ' row(s)</div>' +
-      '<div class="ap-scroll"><table class="ap-tbl">' + PC_CHEAD(false) + b.rows.map(function(r){ return pcCRowHtml(r, false); }).join('') + '</table></div>'; }).join('') +
-    (batches.length > 3 ? '<div class="ap-actions"><button class="ap-btn sm gray" onclick="PC.mineAll=!PC.mineAll;pcCMine()">' + (PC.mineAll ? 'Show the last 3 submits only' : 'Show all ' + batches.length + ' submits') + '</button></div>' : '') +
-    '</div></details>';
+  el.innerHTML = '<div class="ap-h" style="margin-top:18px">Your count today — ' + mine.length + ' row(s) in ' + batches.length + ' submit(s)</div>' +
+    '<div class="ap-hint">✎ to change a row, 🗑 to delete it — the Approver is told in To Do. Older entries and the other encoders\' → 📜 Counted History.</div>' +
+    batches.map(function(b, k){ return '<div class="ap-note" style="margin:8px 0 4px">' + (k === 0 ? '<b>Last submit</b> · ' : '') + esc(toMDYTime(b.at)) + ' · ' + b.rows.length + ' row(s)</div>' +
+      '<div class="ap-scroll"><table class="ap-tbl">' + PC_CHEAD(false) + b.rows.map(function(r){ return pcCRowHtml(r, false); }).join('') + '</table></div>'; }).join('');
 }
 function pcCEditSave(id){
   var g = function(i){ var e = document.getElementById(i); return e ? e : null; };
@@ -2381,6 +2387,7 @@ function pcCSubmit(){
     async function(){ PC.cart = []; pcCCart(); await pcLoadCounts(true); pcCLists(); if (pcIsApv()) pcToAddPanel(); });
 }
 function pcCList(){
+  if (!document.getElementById('pcCList')) return;
   var rows = PC.counts || [], fd = document.getElementById('pcCFDay').value, locSel = document.getElementById('pcCFLoc'), fl = locSel.value, q = document.getElementById('pcCFQ').value.trim().toLowerCase();
   var locs = []; rows.forEach(function(r){ if (locs.indexOf(r.location) === -1) locs.push(r.location); }); locs.sort();
   locSel.innerHTML = '<option value="">All locations (' + locs.length + ')</option>' + apOpt(locs, fl);
@@ -2390,10 +2397,10 @@ function pcCList(){
       (!q || [r.item_code, r.add_description, it && it.description, r.remarks, r.encoded_by].join(' ').toLowerCase().indexOf(q) !== -1);
   });
   var sum = document.getElementById('pcCAllSum');
-  if (sum) sum.innerHTML = '📋 Counted — all encoders: <b>' + rows.length + '</b> row(s) in <b>' + locs.length + '</b> location(s) (click to show / hide)';
+  if (sum) sum.innerHTML = '<b>' + rows.length + '</b> row(s) in <b>' + locs.length + '</b> location(s) — click a location to see its rows';
   var byLoc = {}; f.forEach(function(r){ (byLoc[r.location] = byLoc[r.location] || []).push(r); });
   var keys = Object.keys(byLoc).sort(), one = keys.length === 1;
-  document.getElementById('pcCList').innerHTML = f.length ? '<div class="ap-note" style="margin-bottom:6px">' + f.length + ' row(s) · click a location to see its rows</div>' +
+  document.getElementById('pcCList').innerHTML = f.length ? (f.length !== rows.length ? '<div class="ap-note" style="margin-bottom:6px">' + f.length + ' row(s) shown</div>' : '') +
     keys.map(function(L){ var rs = byLoc[L], open = one || PC.locOpen === L || (PC.editId && rs.some(function(r){ return r.id === PC.editId; }));
       var tq = rs.reduce(function(a, r){ return a + Number(r.qty || 0); }, 0);
       return '<details class="rp-cols" style="margin:6px 0"' + (open ? ' open' : '') + ' ontoggle="if(this.open)PC.locOpen=' + esc(JSON.stringify(L)).replace(/"/g, '&quot;') + '"><summary>📍 <b>' + esc(L) + '</b> — ' + rs.length + ' row(s) · total count ' + pcN(tq) + '</summary>' +
@@ -6374,7 +6381,7 @@ function apTodoRender(){
       }).join('') + '</tbody></table></div>' : '<div class="ap-empty">' + (TODO_SHOW === 'OPEN' ? '🎉 Nothing to do.' : 'Nothing here.') + '</div>') + '</div>';
 }
 // "the PO shows MORE delivered than its receipts" because of deliveries before the app → Done, it does not come back
-function apTodoRpci(pid){ PC.wantPer = pid; PC.tab = 'count'; PC.allOpen = true; showPage('rpci'); }
+function apTodoRpci(pid){ PC.wantPer = pid; PC.tab = 'count'; PC.cview = 'history'; showPage('rpci'); }
 function apTodoIsOld_(t){ return t.status === 'OPEN' && /^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || ''); }
 async function apTodoOld(ids){
   if (!ids.length) return;
