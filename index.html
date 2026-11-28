@@ -1827,7 +1827,10 @@ function pcIsApv(){ return ME.role === 'Approver'; }
 function pcIsMgr(){ return ME.role === 'Approver' || ME.role === 'Admin'; }
 function pcCanEnc(){ return ['Admin','Approver','Encoder','Viewer'].indexOf(ME.role) !== -1; }
 function pcOpen(){ return PC.per && PC.per.status === 'OPEN'; }
-function pcTabs(){ return ME.role === 'Accounting' ? PC_ALL_TABS.filter(function(t){ return t[0] === 'acctg' || t[0] === 'rpci'; }) : PC_ALL_TABS; }
+function pcTabs(){
+  if (ME.role === 'Accounting') return PC_ALL_TABS.filter(function(t){ return t[0] === 'acctg' || t[0] === 'rpci'; });
+  return ME.role === 'Approver' ? PC_ALL_TABS.concat([['todo', '📝 To Do']]) : PC_ALL_TABS;   // To Do: the Approver only
+}
 function pcLocName(l){ return l || '(NO LOCATION)'; }
 function pcDesc(code){ var it = (AP_LISTS ? AP_LISTS.items : []).find(function(i){ return i.item_code === code; }); return it ? it : null; }
 async function pcRpc(fn, args){ var r = await sb.rpc(fn, args); if (r.error) throw r.error; return r.data; }
@@ -1868,7 +1871,7 @@ function pcPickPeriod(){
   PC.sheet = PC.counts = PC.recon = PC.acc = PC.rep = null; PC.cart = [];
   var tabs = pcTabs();
   document.getElementById('pcTabs').innerHTML = !PC.per ? '' : tabs.map(function(t){ return '<button class="subtab-btn" id="pcTab_' + t[0] + '" onclick="pcSwitch(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('');
-  pcInfo();
+  pcInfo(); pcTodoBadge();
   pcSwitch(PC.tab && tabs.some(function(t){ return t[0] === PC.tab; }) ? PC.tab : tabs[0][0]);
 }
 function pcInfo(){
@@ -1886,7 +1889,44 @@ function pcSwitch(t){
   var body = document.getElementById('pcBody');
   if (!PC.per){ if (pcIsMgr()){ pcPeriodForm(true); return; } body.innerHTML = '<div class="ap-empty">No count period yet — the Approver makes one (per semester).</div>'; return; }
   body.innerHTML = '<div class="ap-empty">Loading…</div>';
-  ({ pre: pcPre, sheet: pcSheetTab, prerecon: pcPreRecon, count: pcCount, recon: pcRecon, acctg: pcAcctg, rpci: pcRpci, post: pcPost })[t]();
+  ({ todo: pcTodo, pre: pcPre, sheet: pcSheetTab, prerecon: pcPreRecon, count: pcCount, recon: pcRecon, acctg: pcAcctg, rpci: pcRpci, post: pcPost })[t]();
+}
+
+// ── To Do (Approver only): count rows edited / deleted by the encoders — check them ──
+async function pcTodoLoad(){
+  var r = await sb.from('approver_todos').select('*').like('todo_key', 'RPCI-EDIT:' + PC.per.id + ':%').order('id', { ascending: false });
+  if (r.error) throw r.error; PC.todos = r.data || []; return PC.todos;
+}
+async function pcTodoBadge(){
+  if (ME.role !== 'Approver' || !PC.per) return;
+  try { await pcTodoLoad(); } catch(e){ return; }
+  var n = PC.todos.filter(function(t){ return t.status === 'OPEN'; }).length, b = document.getElementById('pcTab_todo');
+  if (b) b.innerHTML = '📝 To Do' + (n ? ' <span class="pt-count">' + n + '</span>' : '');
+}
+async function pcTodo(){
+  if (ME.role !== 'Approver'){ document.getElementById('pcBody').innerHTML = '<div class="ap-empty">For the Approver only.</div>'; return; }
+  try { await pcTodoLoad(); } catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
+  var show = PC.todoShow || 'OPEN', rows = PC.todos.filter(function(t){ return show === 'ALL' || t.status === show; });
+  var nOpen = PC.todos.filter(function(t){ return t.status === 'OPEN'; }).length;
+  document.getElementById('pcBody').innerHTML =
+    '<div class="ap-hint">Count rows that an encoder changed or deleted after submitting. Check each one (📜 Show), then click ✓ Done.</div>' +
+    '<div class="rp-filters"><div class="ap-f"><label>Show</label><select onchange="PC.todoShow=this.value;pcTodo()">' +
+      '<option value="OPEN"' + (show === 'OPEN' ? ' selected' : '') + '>To do (' + nOpen + ')</option><option value="DONE"' + (show === 'DONE' ? ' selected' : '') + '>Done</option><option value="ALL"' + (show === 'ALL' ? ' selected' : '') + '>All</option></select></div></div>' +
+    (rows.length ? '<div class="ap-scroll"><table class="ap-tbl"><tr><th>When</th><th>Item</th><th>What</th><th>Details</th><th>By</th><th></th></tr>' +
+      rows.map(function(t){ var done = t.status === 'DONE', code = String(t.item || '').split(' — ')[0];
+        return '<tr' + (done ? ' style="opacity:.6"' : '') + '><td class="nw">' + esc(toMDYTime(t.created_at)) + '</td><td style="max-width:220px">' + esc(t.item || '') + '</td>' +
+          '<td><b>' + esc(t.issue) + '</b></td><td style="max-width:380px;font-size:.78rem">' + esc(t.details || '') +
+            (done ? '<div class="ap-ro">✓ Done by ' + esc(t.done_by || '') + ' · ' + esc(toMDYTime(t.done_at)) + (t.done_note ? ' — ' + esc(t.done_note) : '') + '</div>' : '') + '</td>' +
+          '<td class="ap-ro">' + esc(t.created_by || '') + '</td>' +
+          '<td class="nw"><button class="ap-btn sm" data-q="' + esc(code) + '" onclick="PC.histQ=this.dataset.q;PC.cview=\'history\';pcSwitch(\'count\')">📜 Show</button> ' +
+            (done ? '<button class="ap-btn sm gray" onclick="pcTodoSet(' + t.id + ',false)">↺ Reopen</button>'
+                  : '<input type="text" id="pcTdN' + t.id + '" placeholder="note (optional)" style="width:130px;margin:0 4px"/><button class="ap-btn sm green" onclick="pcTodoSet(' + t.id + ',true)">✓ Done</button>') + '</td></tr>'; }).join('') +
+      '</table></div>' : '<div class="ap-empty">' + (show === 'OPEN' ? '🎉 Nothing to check.' : 'Nothing here.') + '</div>');
+  pcTodoBadge();
+}
+function pcTodoSet(id, done){
+  var n = document.getElementById('pcTdN' + id);
+  pcDo('todo_set_done', { p_id: id, p_done: done, p_note: n ? n.value : null }, function(){ return done ? 'Marked done.' : 'Reopened.'; }, function(){ return pcTodo(); });
 }
 
 // ── period form ────────────────────────────────────────────────────────────────
@@ -2265,13 +2305,13 @@ async function pcCount(){
   var locs = (AP_LISTS ? AP_LISTS.loc : []).map(function(l){ return l.location; });
   var items = (AP_LISTS ? AP_LISTS.items : []);
   var hist = PC.cview === 'history';
-  var h = '<div style="display:flex;justify-content:flex-end;margin:-4px 0 4px"><button class="btn btn-out btn-sm" onclick="PC.cview=' + (hist ? '\'form\'' : '\'history\'') + ';PC.editId=null;pcCount()">' +
+  var h = '<div style="display:flex;justify-content:flex-end;margin:-4px 0 4px"><button class="btn btn-out btn-sm" onclick="PC.cview=' + (hist ? '\'form\'' : '\'history\'') + ';PC.editId=null;PC.histQ=null;pcCount()">' +
           (hist ? '📝 Back to Count Form' : '📜 Counted History') + '</button></div>';
   if (hist){
     h += '<div class="ap-h">📜 Counted History — all encoders, per location</div>' +
       '<div class="rp-filters"><div class="ap-f"><label>Day</label><select id="pcCFDay" onchange="pcCList()"><option value="">All days</option>' + dayOpts + '</select></div>' +
       '<div class="ap-f" style="min-width:220px"><label>Location</label><select id="pcCFLoc" onchange="pcCList()"><option value="">All locations</option></select></div>' +
-      '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()" placeholder="code / description / encoder"/></div></div>' +
+      '<div class="ap-f" style="min-width:200px"><label>Search</label><input type="text" id="pcCFQ" oninput="pcCList()" placeholder="code / description / encoder" value="' + esc(PC.histQ || '') + '"/></div></div>' +
       '<div id="pcCAllSum" class="ap-note" style="margin-bottom:6px"></div><div id="pcCList"></div>' +
       '<datalist id="pcCEItemList">' + items.map(function(i){ return '<option value="' + esc(i.item_code) + '">' + esc(i.description) + '</option>'; }).join('') + '</datalist>' + apDl('pcCELocList', locs);
     document.getElementById('pcBody').innerHTML = h; pcCList(); return;
@@ -6347,6 +6387,7 @@ async function apTodoView(){
   try {
     TODO_ROWS = await fetchAll(function(){ var q = sb.from('approver_todos').select('*'); var u = myUnits(); if (u) q = q.in('unit', u);
       return q.order('status', { ascending: false }).order('unit').order('po_number').order('id'); });
+    TODO_ROWS = TODO_ROWS.filter(function(t){ return !/^RPCI-EDIT:/.test(t.todo_key || ''); });   // physical count checks: in the RPCI page (To Do tab)
   } catch(e){ body.innerHTML = '<div class="ap-empty">⚠ ' + esc(errText(e)) + ' — has update 36 been run?</div>'; return; }
   apTodoRender();
 }
@@ -6381,7 +6422,7 @@ function apTodoRender(){
       }).join('') + '</tbody></table></div>' : '<div class="ap-empty">' + (TODO_SHOW === 'OPEN' ? '🎉 Nothing to do.' : 'Nothing here.') + '</div>') + '</div>';
 }
 // "the PO shows MORE delivered than its receipts" because of deliveries before the app → Done, it does not come back
-function apTodoRpci(pid){ PC.wantPer = pid; PC.tab = 'count'; PC.cview = 'history'; showPage('rpci'); }
+function apTodoRpci(pid){ PC.wantPer = pid; PC.tab = 'todo'; showPage('rpci'); }
 function apTodoIsOld_(t){ return t.status === 'OPEN' && /^RCHK:DELIVERED IS HIGHER/.test(t.todo_key || ''); }
 async function apTodoOld(ids){
   if (!ids.length) return;
