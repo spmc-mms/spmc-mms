@@ -1903,13 +1903,15 @@ function pcPeriodForm(isNew){
     apField('Year', 'pcFYear', y, { type: 'number' }) +
     '<div class="ap-f"><label>As at (RPCI)</label><div class="ap-ro" id="pcFAsofTxt" style="padding:9px 0"></div></div>' +
     apField('Pre-count date', 'pcFPre', p.precount_date || '', { type: 'date' }) +
+    (isNew ? '<div style="display:none">' : '') +
     apField('Count — Day 1', 'pcFD1', p.day1 || '', { type: 'date' }) + apField('Count — Day 2', 'pcFD2', p.day2 || '', { type: 'date' }) +
     apField('Count — Day 3', 'pcFD3', p.day3 || '', { type: 'date' }) + apField('Count — Day 4', 'pcFD4', p.day4 || '', { type: 'date' }) +
-    '</div><div class="ap-hint">' + (isNew ? 'Saving makes the <b>Pre-count Sheet</b> of the unit by itself — the system balance now, per location (A → Z), one row per item + expiry. Then: print it (tab 1), encode the pre-count (tab 2), check Pre-count vs System (tab 3), print the Count Sheet, count (tab 4).' : 'Changing the dates does not change the system balance taken. Use ↻ Retake system balance for that.') + '</div>' +
+    (isNew ? '</div>' : '') +
+    '</div><div class="ap-hint">' + (isNew ? 'Saving makes the <b>Pre-count Sheet</b> of the unit by itself — the system balance now, per location (A → Z), one row per item + expiry. Then in tab 1 choose the items in the count and print it. The count dates (Day 1 – Day 4) can be set later in ✎ Period.' : 'Changing the dates does not change the system balance taken. Use ↻ Retake system balance for that.') + '</div>' +
     '<div class="ap-actions"><button class="ap-btn green" onclick="pcPeriodSave(' + (isNew ? 'null' : p.id) + ')">💾 Save' + (isNew ? ' and make the Pre-count Sheet' : '') + '</button>' +
     (PC.per ? '<button class="ap-btn gray" onclick="pcSwitch(PC.tab)">Cancel</button>' : '') +
     (!isNew && pcIsMgr() && pcOpen() ? '<button class="ap-btn orange" onclick="pcSnapshot()">↻ Retake system balance</button>' : '') +
-    (!isNew && pcIsApv() && pcOpen() ? '<button class="ap-btn red" onclick="pcPeriodDel()">🗑 Delete this count</button>' : '') + '</div>';
+    (!isNew && pcIsMgr() && pcOpen() ? '<button class="ap-btn red" onclick="pcPeriodDel()">🗑 Delete this count</button>' : '') + '</div>';
   pcMsg(''); document.getElementById('pcBody').innerHTML = h;
   document.getElementById('pcFSem').value = sem; pcFAsof();
   document.getElementById('pcFYear').oninput = pcFAsof;
@@ -1932,8 +1934,10 @@ function pcSnapshot(){
   pcDo('rpci_snapshot', { p_period: PC.per.id }, function(d){ return 'System balance taken again: ' + d.lots + ' batch(es).'; }, function(){ return pcLoadPeriods(PC.per.id); });
 }
 function pcPeriodDel(){
-  if (!confirm('Delete this count period with ALL its pre-count, count, reconcile and accounting rows?')) return;
-  pcDo('rpci_period_delete', { p_period: PC.per.id }, function(){ return 'Count period deleted.'; }, function(){ PC.per = null; return pcLoadPeriods(); });
+  var p = PC.per, others = PC.periods.filter(function(x){ return x.id !== p.id && x.as_of === p.as_of && x.status === 'OPEN'; });
+  if (!confirm('Delete the count of ' + p.unit + ' — ' + pcSemName(p) + ', with ALL its pre-count, count, reconcile and accounting rows?')) return;
+  var all = others.length > 0 && confirm('Also delete the ' + pcSemName(p) + ' count of the other units (' + others.map(function(x){ return x.unit; }).join(', ') + ')?\n\nOK = delete them too · Cancel = only ' + p.unit);
+  pcDo('rpci_period_delete', { p_period: p.id, p_all: all }, function(d){ return (d.deleted || 1) + ' count period(s) deleted.'; }, function(){ PC.per = null; return pcLoadPeriods(); });
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────
@@ -1956,9 +1960,47 @@ async function pcPre(){
   var h = '<div class="rp-filters"><div class="ap-f" style="min-width:260px"><label>Location</label><select id="pcPreLoc" onchange="pcPreTable()"><option value="">All locations (' + locs.length + ')</option>' + apOpt(locs) + '</select></div>' +
     '<button class="ap-btn" onclick="pcPrintSheet(\'pre\', document.getElementById(\'pcPreLoc\').value)">🖨 Print Pre-count Sheet</button>' +
     (pcIsMgr() && pcOpen() ? '<button class="ap-btn orange" onclick="pcSnapshot()">↻ Retake system balance</button>' : '') + '</div>' +
-    '<div class="ap-hint">BALANCE = the system balance when the count period was made (one row per item + expiry, per location; locations A → Z). ADVANCE ✓ = the batch came from an Advance. 5 blank rows are added per location for items found there.</div>' +
+    '<div id="pcItemsBox"></div>' +
+    '<div class="ap-hint">BALANCE = the system balance when the count period was made (one row per item + expiry, per location; locations A → Z). ADVANCE ✓ = the batch came from an Advance. 5 blank rows are added per location for items found there. Only the items in the count are on the sheet.</div>' +
     '<div id="pcPreOut"></div>';
-  document.getElementById('pcBody').innerHTML = h; pcPreTable();
+  document.getElementById('pcBody').innerHTML = h; pcPreTable(); pcItemsLoad();
+}
+// items in the count: include / exclude (excluded = resolve first by RIS / PO)
+async function pcItemsLoad(){
+  try { var r = await sb.rpc('rpci_items', { p_period: PC.per.id }); if (r.error) throw r.error; PC.items = r.data || []; }
+  catch(e){ document.getElementById('pcItemsBox').innerHTML = '<div class="ap-msg err" style="display:block">❌ ' + esc(errText(e)) + ' — was update 100 run in Supabase?</div>'; return; }
+  var inc = PC.items.filter(function(x){ return x.included; }).length, exc = PC.items.length - inc, ed = pcOpen() && pcIsMgr();
+  document.getElementById('pcItemsBox').innerHTML = '<details class="rp-cols" id="pcItemsDet"' + (PC.itemsOpen ? ' open' : '') + ' ontoggle="PC.itemsOpen=this.open"><summary>☑ Items in this count — <b>' + inc + '</b> included' + (exc ? ' · <b style="color:#c0392b">' + exc + ' excluded</b> (to resolve by RIS / PO)' : '') + (ed ? ' — click to choose' : '') + '</summary>' +
+    '<div style="padding:6px 12px 12px"><div class="rp-filters"><div class="ap-f"><label>Show</label><select id="pcItShow" onchange="pcItTable()"><option value="">All items</option><option value="in">Included</option><option value="ex">Excluded</option></select></div>' +
+    '<div class="ap-f" style="min-width:220px"><label>Search</label><input type="text" id="pcItQ" oninput="pcItTable()" placeholder="code / description"/></div></div>' +
+    (ed ? '<div class="rp-filters" style="align-items:flex-end;margin-top:-4px"><div class="ap-f"><label>Reason (exclude)</label><select id="pcItReason"><option>NEEDS RIS</option><option>NEEDS PO</option><option>OTHER</option></select></div>' +
+      '<div class="ap-f" style="min-width:240px"><label>Remarks</label><input type="text" id="pcItRem"/></div>' +
+      '<button class="ap-btn red" onclick="pcItSet(true)">✕ Exclude the ticked</button><button class="ap-btn green" onclick="pcItSet(false)">✓ Include the ticked</button></div>' : '') +
+    '<div id="pcItOut"></div></div></details>';
+  pcItTable();
+}
+function pcItRows(){
+  var s = document.getElementById('pcItShow').value, q = document.getElementById('pcItQ').value.trim().toLowerCase();
+  return (PC.items || []).filter(function(x){ return (!s || (s === 'in') === !!x.included) && (!q || [x.item_code, x.description, x.remarks].join(' ').toLowerCase().indexOf(q) !== -1); });
+}
+function pcItTable(){
+  var rows = pcItRows(), ed = pcOpen() && pcIsMgr();
+  document.getElementById('pcItOut').innerHTML = rows.length ? '<div class="ap-scroll" style="max-height:420px"><table class="ap-tbl"><tr>' + (ed ? '<th><input type="checkbox" title="Tick all shown" onchange="document.querySelectorAll(\'.pcItChk\').forEach(function(c){ c.checked = this.checked; }, this)"/></th>' : '') +
+    '<th>Code</th><th>Description</th><th>Unit</th><th style="text-align:right">System qty</th><th style="text-align:right">Locations</th><th>Adv.</th><th>In the count</th><th>Remarks</th></tr>' +
+    rows.map(function(x){ return '<tr' + (x.included ? '' : ' style="background:#fdecea"') + '>' + (ed ? '<td><input type="checkbox" class="pcItChk" value="' + esc(x.item_code) + '"/></td>' : '') +
+      '<td>' + esc(x.item_code) + '</td><td>' + esc(x.description || '') + '</td><td>' + esc(x.uom || '') + '</td><td style="text-align:right">' + pcN(x.system_qty) + '</td><td style="text-align:right">' + x.locations + '</td><td>' + (x.is_advance ? '✓' : '') + '</td>' +
+      '<td>' + (x.included ? '<span class="ap-tag ok">included</span>' : '<span class="ap-tag warn">excluded · ' + esc(x.reason || '') + '</span>') + '</td>' +
+      '<td>' + esc(x.remarks || '') + (x.excluded_by ? ' <span class="ap-ro">' + esc(x.excluded_by) + '</span>' : '') + (x.counted_rows ? ' <span class="ap-ro">(' + x.counted_rows + ' count row/s)</span>' : '') + '</td></tr>'; }).join('') +
+    '</table></div>' : '<div class="ap-empty">No items.</div>';
+}
+function pcItSet(exclude){
+  var codes = Array.prototype.map.call(document.querySelectorAll('.pcItChk:checked'), function(c){ return c.value; });
+  if (!codes.length){ pcMsg('err', 'Tick the items first.'); return; }
+  var reason = document.getElementById('pcItReason').value, rem = document.getElementById('pcItRem').value;
+  if (exclude && !confirm('Exclude ' + codes.length + ' item(s) from this count (' + reason + ')? They will not be on the Pre-count / Count Sheet.')) return;
+  pcDo('rpci_exclude_set', { p_period: PC.per.id, p_codes: codes, p_exclude: exclude, p_reason: reason, p_remarks: rem },
+    function(d){ return d.items + ' item(s) ' + (exclude ? 'excluded (' + esc(reason) + ')' : 'included') + '.'; },
+    async function(){ PC.itemsOpen = true; await pcLoadSheet(true); pcPreTable(); await pcItemsLoad(); });
 }
 function pcPreTable(){
   var loc = document.getElementById('pcPreLoc').value;
@@ -2434,6 +2476,7 @@ async function pcPost(){
     try { counts = await pcLoadCounts(true); var r = await sb.rpc('rpci_recon_rows', { p_period: p.id }); if (r.error) throw r.error; recon = PC.recon = r.data || []; }
     catch(e){ pcMsg('err', '❌ ' + esc(errText(e))); return; }
     var toAdd = counts.filter(function(c){ return !c.item_code; }).length;
+    try { var ex = await sb.from('rpci_excluded').select('id').eq('period_id', p.id); PC.exCount = (ex.data || []).length; } catch(e){ PC.exCount = 0; }
     var vars = recon.filter(function(x){ return x.counted && Number(x.variance) !== 0; });
     var notReady = vars.filter(function(x){ return ['ADJUST','OK'].indexOf(x.action || '') === -1; }).length;
     var nc = []; recon.forEach(function(x){ if (!x.counted){ var l = pcLocName(x.location); if (nc.indexOf(l) === -1) nc.push(l); } });
@@ -2443,7 +2486,8 @@ async function pcPost(){
       li(counts.length > 0, counts.length + ' count row(s) encoded') +
       li(!toAdd, toAdd ? toAdd + ' "For add code" row(s) still need a code (step 4, TO ADD)' : 'every counted row has an item code') +
       li(!notReady, notReady ? notReady + ' variance(s) not marked ADJUST yet, or still waiting for the RIS / PO (step 5)' : vars.length + ' variance(s) ready') +
-      (nc.length ? '<li style="margin:5px 0">⚠️ Not counted (will not be changed): ' + esc(nc.join(', ')) + '</li>' : '') + '</ul>' +
+      (nc.length ? '<li style="margin:5px 0">⚠️ Not counted (will not be changed): ' + esc(nc.join(', ')) + '</li>' : '') +
+      (PC.exCount ? '<li style="margin:5px 0">⚠️ ' + PC.exCount + ' item(s) excluded from this count (to resolve by RIS / PO) — not changed by posting.</li>' : '') + '</ul>' +
       '<div class="ap-hint">Posting makes the stock of every counted location / item / expiry equal to the count, per fund: shortages are taken out of the batches (newest first), overages become new batches — all with reference <b>RPCI ' + esc(toMDY(p.as_of)) + '</b> on the stock card, dated ' + esc(toMDY(p.as_of < TODAY_STR ? p.as_of : TODAY_STR)) + '. The RPCI figures are kept as they were. This cannot be undone.</div>' +
       (pcIsApv() ? '<div class="ap-actions"><button class="ap-btn green" ' + (ok ? '' : 'disabled') + ' onclick="pcDoPost()">✔ Post — the stock becomes the count (' + esc(pcBegLabel()) + ')</button></div>' : '<div class="ap-note">Only the Approver posts.</div>');
     document.getElementById('pcBody').innerHTML = h; return;
